@@ -4,7 +4,6 @@ const axios = require('axios');
 // === 配置区 ===
 const CONFIG = {
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  // 环境变量中读取用户，每行一个
   targetUsers: process.env.TARGET_USERS || 'lb\n哎哎哎哎哎哎哎哎哎唉\n鸡排炸虾🍤',
   messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
   gotoTimeout: 60000
@@ -25,24 +24,28 @@ async function getHitokoto() {
  */
 function fixCookies(rawCookies) {
   return rawCookies.map(cookie => {
-    // 处理 Playwright 严格要求的 sameSite 格式
+    // 1. 处理 Playwright 严格要求的 sameSite 格式
     if (cookie.sameSite) {
       const ss = cookie.sameSite.toLowerCase();
       if (ss === 'lax') cookie.sameSite = 'Lax';
       else if (ss === 'strict') cookie.sameSite = 'Strict';
       else if (ss === 'none') cookie.sameSite = 'None';
-      else delete cookie.sameSite; // 无法识别的值直接删除
+      else delete cookie.sameSite; // 无法识别的值直接删除，防止报错
     } else {
-      delete cookie.sameSite; // 空字符串删除
+      delete cookie.sameSite; // 空字符串也必须删除
     }
-    // 移除 Playwright 不支持的字段（如 storeId）
+    
+    // 2. 移除 Playwright 不支持的字段（如 storeId, hostOnly 等）
     delete cookie.storeId;
+    delete cookie.hostOnly;
+    delete cookie.session;
+    
     return cookie;
   });
 }
 
 /**
- * 模拟真人行为寻找并点击用户
+ * 寻找并点击用户
  */
 async function scrollAndFindUser(page, username) {
   log('info', `🔍 正在寻找用户: ${username}`);
@@ -81,11 +84,11 @@ async function main() {
   try {
     rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
   } catch (e) {
-    log('error', 'COOKIES JSON 解析失败，请检查 Secret 配置');
+    log('error', 'COOKIES JSON 解析失败，请检查 Secret 配置是否为正确的 JSON 数组');
     process.exit(1);
   }
 
-  // 清洗并修复 Cookie 格式
+  // 【关键修复】清洗并修复 Cookie 格式
   const cleanCookies = fixCookies(rawCookies);
 
   const browser = await chromium.launch({ headless: true });
@@ -95,15 +98,16 @@ async function main() {
   });
 
   try {
+    // 注入修复后的 Cookie
     await context.addCookies(cleanCookies);
     const page = await context.newPage();
 
     log('info', '🚀 正在进入抖音页面...');
     await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded', timeout: CONFIG.gotoTimeout });
     
-    await page.waitForTimeout(10000); // 给页面留出加载时间
+    await page.waitForTimeout(10000); // 预留加载时间
 
-    // 诊断：检查是否被重定向到登录页
+    // 检查是否重定向到登录页
     if (page.url().includes('login')) {
       log('error', '❌ Cookie 已失效，重定向到了登录页！');
       await page.screenshot({ path: 'COOKIE_EXPIRED.png' });
