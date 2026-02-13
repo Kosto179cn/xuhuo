@@ -154,70 +154,94 @@ async function getMessageContent() {
   return message;
 }
 
-// 查找并点击用户
+// 查找并点击用户 (优化版：增加调试日志和精准定位)
 async function findAndClickUser(page, username) {
-  log('info', `正在查找用户: ${username}`);
-  
+  // log('info', `正在查找用户: ${username}`); // 减少刷屏
+
   try {
-    // 等待聊天列表加载（增加超时时间）
-    await page.waitForSelector('[class*="item-header-name-"]', { 
-      timeout: CONFIG.userSearchTimeout * 2 
-    });
-    
-    // 获取所有用户元素
-    const userElements = await page.$$('[class*="item-header-name-"]');
-    
-    // 查找目标用户
-    for (const element of userElements) {
-      const text = await element.textContent();
-      if (text && text.trim() === username) {
-        log('success', `找到目标用户: ${username}`);
-        await element.click();
+    // 1. 尝试直接使用 Playwright 的文本定位器 (最准确，忽略 class 变化)
+    // 使用 exact: true 确保完全匹配，防止"张三"匹配到"张三丰"
+    const userLocator = page.getByText(username, { exact: true });
+
+    // 检查是否可见
+    if (await userLocator.isVisible()) {
+        log('success', `通过文本定位找到用户: ${username}`);
+        await userLocator.click();
         return true;
-      }
     }
-    
-    log('warn', `未找到用户: ${username}`);
+
+    // 2. 如果上面的没找到，打印当前屏幕上看到了谁 (用于调试)
+    // 这一步非常重要，能帮你确认是因为名字写错了，还是真的没加载出来
+    const visibleNames = await page.$$eval('[class*="item-header-name-"]', elements =>
+      elements.map(el => el.textContent.trim())
+    );
+    // 只在第一次滚动时打印，避免日志太长
+    if (global.debugLogCounter === undefined || global.debugLogCounter < 1) {
+       log('info', `当前屏幕可见用户: ${visibleNames.join(', ')}`);
+       global.debugLogCounter = (global.debugLogCounter || 0) + 1;
+    }
+
     return false;
   } catch (error) {
-    log('error', `查找用户时出错: ${error.message}`);
+    // 忽略定位超时的错误，继续滚动
     return false;
   }
 }
 
-// 滚动查找用户
+// 滚动查找用户 (优化版：使用鼠标滚轮触发虚拟列表加载)
 async function scrollAndFindUser(page, username) {
   log('info', `开始滚动查找用户: ${username}`);
-  
-  const maxScrolls = 20;
+
+  // 重置调试计数器
+  global.debugLogCounter = 0;
+
+  const maxScrolls = 50; // 增加滚动次数，虚拟列表可能很长
   let scrollCount = 0;
-  
+
+  // 定位滚动容器 (根据你的 HTML 结构)
+  const gridSelector = '.ReactVirtualized__Grid';
+
+  // 确保容器存在
+  try {
+    await page.waitForSelector(gridSelector, { timeout: 5000 });
+  } catch (e) {
+    log('error', '未找到聊天列表容器，无法滚动');
+    return false;
+  }
+
   while (scrollCount < maxScrolls) {
-    // 先尝试查找
+    // 1. 先尝试查找并点击
     const found = await findAndClickUser(page, username);
     if (found) {
       return true;
     }
-    
-    // 滚动聊天列表
+
+    // 2. 执行滚动 (关键修改：使用鼠标滚轮)
     try {
-      const chatContainer = await page.$('.ReactVirtualized__Grid') || 
-                           await page.$('[class*="list-container"]') ||
-                           await page.$('.semi-list-content');
-      
-      if (chatContainer) {
-        await chatContainer.evaluate(el => el.scrollTop += 400);
+      // 获取列表容器的位置
+      const box = await page.locator(gridSelector).boundingBox();
+      if (box) {
+        // 将鼠标移动到列表中心
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        // 模拟鼠标滚轮向下滚动 (X, Y)
+        await page.mouse.wheel(0, 600);
+
+        // 3. 等待 React 渲染新行 (虚拟列表需要时间加载 DOM)
+        // 如果网速慢或电脑卡，可以适当增加这个时间
+        await page.waitForTimeout(1000);
+      } else {
+        log('warn', '无法获取列表位置，尝试使用键盘翻页');
+        await page.keyboard.press('PageDown');
+        await page.waitForTimeout(1000);
       }
-      
-      // 等待页面更新
-      await page.waitForTimeout(500);
     } catch (error) {
       log('warn', `滚动时出错: ${error.message}`);
     }
-    
+
     scrollCount++;
   }
-  
+
+  log('warn', `已滚动到底或达到最大次数，仍未找到用户: ${username}`);
   return false;
 }
 
