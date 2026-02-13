@@ -1,49 +1,133 @@
-## DouYin Spark Flow
+# 抖音续火花自动发送助手 - GitHub Actions 版本
 
-> 抖音自动续火花脚本
+将原油猴脚本移植到 GitHub Actions，实现自动化续火花功能。
 
-**特性**
-- [x] 多用户,同时批量支持多个账户
-- [x] 多目标,一个账户支持多个续火花目标
-- [x] 一言支持,更丰富的消息文本
+## 功能特性
 
-使用`PlayWright`以及`chrome-headless-shell`自动化操作[抖音创作者中心](https://creator.douyin.com/)，进行定时发送抖音消息来续火花
+- ✅ 自动发送续火消息给多个目标用户
+- ✅ 集成一言 API
+- ✅ 支持专属一言（每天不同的文案）
+- ✅ 支持手动文案库
+- ✅ 自动记录火花天数
+- ✅ 定时任务（每天自动运行）
+- ✅ 支持手动触发
+- ✅ 完整的日志记录
 
-### 使用
+## 使用前准备
 
-#### 1. 克隆项目到本地，并完成环境配置
-```shell
-pip install -r requirements.txt
+### 1. 获取抖音 Cookies
+
+1. 在浏览器中登录抖音创作者中心：https://creator.douyin.com/
+2. 按 F12 打开开发者工具
+3. 进入 Application/存储 -> Cookies -> https://creator.douyin.com
+4. 导出所有 Cookies（推荐使用 EditThisCookie 插件）
+5. 将导出的 JSON 数据保存下来
+
+**Cookies 格式示例：**
+```json
+[
+  {"name": "sessionid", "value": "xxx", "domain": ".douyin.com"},
+  {"name": "passport_csrf_token", "value": "xxx", "domain": ".douyin.com"}
+]
 ```
 
-#### 2. 运行main.py
-首次运行`python main.py`时，会自动下载需要的测试浏览器，默认从Mozilla的镜像站下载，需要保证网络通畅。
+### 2. 配置 GitHub Secrets
 
-#### 3. 登录用户
-运行main.py后，会弹出可选择的项目，这时选择添加用户登录，你可以选择添加多个用户。具体操作方式根据提示在弹出窗口扫码登录抖音创作者中心即可，登录成功后你需要根据提示查看对应联系人的名称，并在控制台输入。
+在你的 GitHub 仓库中设置以下 Secrets（Settings -> Secrets and variables -> Actions）:
 
-#### 4. 更改配置
+| Secret 名称 | 说明 | 示例 |
+|------------|------|------|
+| `DOUYIN_COOKIES` | 抖音 Cookies JSON 字符串 | `[{"name":"xxx","value":"xxx",...}]` |
+| `TARGET_USERS` | 目标用户列表（每行一个） | `用户1\n用户2\n用户3` |
+| `TXT_MANUAL_TEXT` | 手动文案库（可选） | `早安\n晚安` |
+| `SPECIAL_MONDAY` | 周一专属文案（可选） | `周一文案1\n周一文案2` |
+| `SPECIAL_TUESDAY` | 周二专属文案（可选） | `周二文案1\n周二文案2` |
+| `SPECIAL_WEDNESDAY` | 周三专属文案（可选） | `周三文案1\n周三文案2` |
+| `SPECIAL_THURSDAY` | 周四专属文案（可选） | `周四文案1\n周四文案2` |
+| `SPECIAL_FRIDAY` | 周五专属文案（可选） | `周五文案1\n周五文案2` |
+| `SPECIAL_SATURDAY` | 周六专属文案（可选） | `周六文案1\n周六文案2` |
+| `SPECIAL_SUNDAY` | 周日专属文案（可选） | `周日文案1\n周日文案2` |
+| `MESSAGE_TEMPLATE` | 消息模板（可选） | `——续火——\n\n[TXTAPI]` |
 
-你可以选择更改config.json中的配置，目前proxyAddress的代理设置还没有实现。其他项目解释如下：
-|名称|作用解释|期望值|
-|-----|-----|-----|
-|multiTask|是否启用多任务，登录多个账户后生效，启用后同时操作多个账户的任务加快执行速度|`true` `false`|
-|taskCount|最大同时操作的账户数目，需要先启用multiTask|int，默认`5`|
-|messageTemplate|发送消息的模板，可以从聊天框编辑好个时候复制|使用`[API]`引用每日一言内容 默认值为： `[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]`|
-|hitokotoTypes|每日一言消息允许的类型|可以留空使用所有类型`[]`,全部可选类型的列表为：`["动画","漫画","游戏","文学","原创","来自网络","影视","诗词","哲学","抖机灵","其他"]`|
+### 3. 克隆本仓库到你的 GitHub
 
-#### 5. 测试运行
+将本项目的文件上传到你自己的 GitHub 仓库。
 
-再次运行main.py之后选择`3.本地运行任务`,查看是否能够正常执行任务
+## 本地测试
 
-#### 6. Github Acion部署
+在推送代码到 GitHub 之前，建议先在本地测试：
 
-项目可以部署到Github Action每日定时触发，在测试完毕后，你需要将本地代码推送到自己的Github仓库，你也可以选择直接克隆本仓库后续将config.json同步即可（如果你更改了设置的话）。本地通过usersData.json存储已经登录的账户凭证，为了防止信息泄露，Action不能像本地那样从明文读取这个配置，也不要将这个文件上传到Github，正确做法是将内容存放到`secrets`中
+```bash
+# 安装依赖
+npm install
 
-> 方法: 在你的Github仓库下操作，选择settings->Environments，在下面新建一个`user-data`环境，继续在这个`user-data`环境的Environment secrets添加名为`USER_DATA`的项目
+# 设置环境变量（Windows PowerShell）
+$env:DOUYIN_COOKIES = '[{"name":"xxx","value":"xxx"}]'
+$env:TARGET_USERS = '用户1\n用户2'
 
-关于这个配置的内容可以再次运行main.py,选择`2. 获取Github Action配置`将对应输出内容填入`USER_DATA`的值即可
+# 设置环境变量（Linux/Mac）
+export DOUYIN_COOKIES='[{"name":"xxx","value":"xxx"}]'
+export TARGET_USERS='用户1\n用户2'
 
+# 运行脚本
+npm start
+```
 
-#### 7. （可选）手动触发Action进行测试
+## 定时任务配置
 
+默认配置为每天北京时间 00:01 运行。如需修改，编辑 `.github/workflows/douyin-auto-fire.yml` 文件中的 cron 表达式：
+
+```yaml
+schedule:
+  # cron 表达式格式：分 时 日 月 周
+  # 北京时间 = UTC + 8
+  - cron: '1 16 * * *'  # UTC 16:01 = 北京时间 00:01
+```
+
+## 消息模板占位符
+
+可以在消息模板中使用以下占位符：
+
+- `[API]` - 一言内容
+- `[TXTAPI]` - TXTAPI 内容
+- `[专属一言]` - 专属一言内容
+- `[天数]` - 火花天数
+
+默认模板：
+```
+—————每日续火—————
+[TXTAPI]
+—————每日一言—————
+[API]
+—————专属一言—————
+[专属一言]
+```
+
+## 手动触发任务
+
+在 GitHub Actions 页面，点击 "Run workflow" 按钮即可手动触发任务。
+
+## 注意事项
+
+1. **Cookies 有效期**：抖音 Cookies 可能会过期，需要定期更新
+2. **风控风险**：请合理使用，避免频繁操作导致账号风控
+3. **用户列表**：确保目标用户名与抖音中显示的完全一致
+4. **网络环境**：GitHub Actions 在国外服务器运行，访问抖音可能较慢
+
+## 故障排查
+
+### Cookies 过期
+- 错误提示：`需要重新登录，请更新 Cookies`
+- 解决：重新获取 Cookies 并更新到 Secrets
+
+### 找不到用户
+- 错误提示：`未找到用户: xxx`
+- 解决：检查用户名是否正确（区分大小写）
+
+### 页面加载超时
+- 错误提示：`页面加载超时`
+- 解决：可能是网络问题，尝试手动触发重试
+
+## 许可证
+
+MIT License
