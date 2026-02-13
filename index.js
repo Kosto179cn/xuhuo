@@ -154,28 +154,25 @@ async function getMessageContent() {
   return message;
 }
 
-// 查找并点击用户 (修正版)
+// 查找并点击用户 (精准匹配版)
 async function findAndClickUser(page, username) {
   try {
-    // 使用 XPath 忽略类名后缀，直接匹配文本
-    // 匹配 span 且类名包含 item-header-name
-    const xpath = `//span[contains(@class, 'item-header-name') and normalize-space(text())='${username}']`;
-    const userLocator = page.locator(xpath).first();
+    // 使用 XPath 寻找：类名包含 name 且文本完全匹配
+    // normalize-space 可以自动处理文本前后的换行或空格
+    const xpath = `//span[contains(@class, 'name') and normalize-space(text())='${username}']`;
+    const user = page.locator(xpath).first();
 
-    if (await userLocator.isVisible()) {
-      log('success', `确认可见并点击用户: ${username}`);
-
-      // 重点：点击名字所在的按钮或 div 容器，而不是 span 文本本身
-      // 抖音的结构中，点击 span 的父级 div.item-fWZowv 最稳妥
-      await userLocator.click({ force: true, timeout: 3000 });
-
-      // 等待右侧聊天窗口加载完成（出现输入框）
-      await page.waitForTimeout(1500);
+    if (await user.isVisible()) {
+      log('success', `找到用户 ${username}，正在点击...`);
+      // 强制点击，因为外面可能有透明层
+      await user.click({ force: true });
+      // 等待 2 秒让聊天框加载
+      await page.waitForTimeout(2000);
       return true;
     }
 
     // 调试日志：打印当前所有可见的名字
-    const visibleNames = await page.$$eval('[class*="item-header-name"]', elements =>
+    const visibleNames = await page.$$eval('[class*="name"]', elements =>
       elements.map(el => el.textContent.trim())
     );
 
@@ -185,46 +182,49 @@ async function findAndClickUser(page, username) {
     }
 
     return false;
-  } catch (error) {
+  } catch (e) {
     return false;
   }
 }
 
-// 滚动查找用户 (优化版：使用 scrollTop 触发虚拟列表)
+// 滚动查找用户 (暴力兼容版)
 async function scrollAndFindUser(page, username) {
   log('info', `开始滚动查找用户: ${username}`);
-  global.debugLogCounter = 0;
 
-  // 尝试定位滚动容器：优先找 role="grid" 的 div
-  const gridSelector = 'div[role="grid"].ReactVirtualized__Grid';
-  const gridExists = await page.locator(gridSelector).count();
+  // 1. 尝试多种定位方式找到滚动容器
+  const selectors = [
+    'div[role="grid"]',
+    '.ReactVirtualized__Grid',
+    '.ReactVirtualized__List',
+    '.list-UuDnnd div[style*="overflow: auto"]' // 针对你 HTML 特征的定位
+  ];
 
-  if (gridExists === 0) {
-    log('error', '致命错误：无法定位聊天列表容器。尝试全页面滚动模式。');
+  let gridLocator = null;
+  for (const selector of selectors) {
+    const loc = page.locator(selector).first();
+    if (await loc.count() > 0) {
+      gridLocator = loc;
+      log('info', `成功锁定容器选择器: ${selector}`);
+      break;
+    }
   }
 
-  const maxScrolls = 50;
+  // 2. 如果还是没找到明确容器，我们就对着页面中心"盲滚"
+  const maxScrolls = 40;
   for (let i = 0; i < maxScrolls; i++) {
-    // 检查用户是否在当前视图中
     const found = await findAndClickUser(page, username);
     if (found) return true;
 
-    // 执行滚动操作
-    try {
-      if (gridExists > 0) {
-        // 在容器内部滚动
-        await page.locator(gridSelector).evaluate((el) => {
-          el.scrollTop += 600; // 向下滚动 600 像素
-        });
-      } else {
-        // 备选方案：鼠标滚轮
-        await page.mouse.wheel(0, 600);
-      }
-      // 关键：给 React 虚拟列表留出渲染新 DOM 的时间
-      await page.waitForTimeout(1000);
-    } catch (e) {
-      log('warn', `滚动异常: ${e.message}`);
+    if (gridLocator) {
+      // 方式 A：直接操作 DOM 滚动（最稳）
+      await gridLocator.evaluate(el => el.scrollTop += 800);
+    } else {
+      // 方式 B：模拟鼠标在页面中心滚动
+      await page.mouse.wheel(0, 800);
     }
+
+    // 给 React 留出渲染新列表项的时间
+    await page.waitForTimeout(1200);
   }
   return false;
 }
@@ -307,7 +307,7 @@ async function main() {
   });
   
   const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 }, // 设置大分辨率，确保列表能加载更多内容
+    viewport: { width: 1440, height: 900 }, // 必须设置足够大的视口
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });
   
@@ -347,12 +347,27 @@ async function main() {
     }
     
     // 检查页面是否有内容
-    const hasContent = await page.$('[class*="item-header-name-"]');
+    const hasContent = await page.$('[class*="name"]');
     if (!hasContent) {
-      log('warn', '页面未检测到聊天列表，可能需要滚动等待');
-      await page.waitForTimeout(5000);
+      log('warn', '页面未检测到聊天列表，等待加载...');
+      // 增加等待时间，抖音的 semi-spin 加载有时很慢
+      await page.waitForTimeout(15000);
     }
-    
+
+    // 检查是否有加载动画
+    const hasSpinner = await page.$('.semi-spin');
+    if (hasSpinner) {
+      log('warn', '检测到加载动画，继续等待...');
+      await page.waitForSelector('.semi-spin', { state: 'hidden', timeout: 30000 }).catch(() => {});
+    }
+
+    // 最终检查
+    const finalCheck = await page.$('[class*="name"]');
+    if (!finalCheck) {
+      log('error', '页面长时间未加载聊天列表，可能需要重新登录');
+      return;
+    }
+
     log('success', '页面加载成功');
     
     // 遍历所有目标用户
