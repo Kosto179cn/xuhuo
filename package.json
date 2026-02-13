@@ -1,0 +1,13 @@
+{
+  "name": "douyin-auto-fire",
+  "version": "1.0.0",
+  "description": "抖音续火花自动发送助手 - GitHub Actions 版本",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "axios": "^1.6.0"
+  }
+}
