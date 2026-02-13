@@ -157,19 +157,25 @@ async function getMessageContent() {
 // 查找并点击用户 (修正版)
 async function findAndClickUser(page, username) {
   try {
-    // 匹配包含 'item-header-name-' 类的 span，且文本内容去除空格后等于目标
-    const xpath = `//span[contains(@class, 'item-header-name-') and normalize-space(text())='${username}']`;
-    const userLocator = page.locator(xpath);
+    // 使用 XPath 忽略类名后缀，直接匹配文本
+    // 匹配 span 且类名包含 item-header-name
+    const xpath = `//span[contains(@class, 'item-header-name') and normalize-space(text())='${username}']`;
+    const userLocator = page.locator(xpath).first();
 
     if (await userLocator.isVisible()) {
-      log('success', `找到并准备点击用户: ${username}`);
-      // 强制点击，防止被层级遮挡
-      await userLocator.click({ force: true, timeout: 2000 });
+      log('success', `确认可见并点击用户: ${username}`);
+
+      // 重点：点击名字所在的按钮或 div 容器，而不是 span 文本本身
+      // 抖音的结构中，点击 span 的父级 div.item-fWZowv 最稳妥
+      await userLocator.click({ force: true, timeout: 3000 });
+
+      // 等待右侧聊天窗口加载完成（出现输入框）
+      await page.waitForTimeout(1500);
       return true;
     }
 
     // 调试日志：打印当前所有可见的名字
-    const visibleNames = await page.$$eval('[class*="item-header-name-"]', elements =>
+    const visibleNames = await page.$$eval('[class*="item-header-name"]', elements =>
       elements.map(el => el.textContent.trim())
     );
 
@@ -184,48 +190,38 @@ async function findAndClickUser(page, username) {
   }
 }
 
-// 滚动查找用户 (优化版：动态容器定位)
+// 滚动查找用户 (优化版：使用 scrollTop 触发虚拟列表)
 async function scrollAndFindUser(page, username) {
   log('info', `开始滚动查找用户: ${username}`);
   global.debugLogCounter = 0;
 
-  // 1. 动态获取容器：抖音的列表通常是 role="grid" 或带有特定 class
-  // 尝试多个可能的选择器
-  const selectors = ['.ReactVirtualized__Grid', '[role="grid"]', '.chat-list-container'];
-  let gridElement = null;
+  // 尝试定位滚动容器：优先找 role="grid" 的 div
+  const gridSelector = 'div[role="grid"].ReactVirtualized__Grid';
+  const gridExists = await page.locator(gridSelector).count();
 
-  for (const s of selectors) {
-    const el = await page.$(s);
-    if (el) {
-      gridElement = el;
-      log('info', `定位到容器: ${s}`);
-      break;
-    }
+  if (gridExists === 0) {
+    log('error', '致命错误：无法定位聊天列表容器。尝试全页面滚动模式。');
   }
 
-  if (!gridElement) {
-    log('error', '未找到聊天列表容器，尝试在全页面级别滚动');
-    // 如果找不到容器，退而求其次，在页面中心滚动
-    await page.mouse.move(500, 500);
-  }
-
-  const maxScrolls = 60;
+  const maxScrolls = 50;
   for (let i = 0; i < maxScrolls; i++) {
+    // 检查用户是否在当前视图中
     const found = await findAndClickUser(page, username);
     if (found) return true;
 
-    // 执行滚动
+    // 执行滚动操作
     try {
-      if (gridElement) {
-        const box = await gridElement.boundingBox();
-        if (box) {
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.mouse.wheel(0, 800); // 增加滚动幅度
-        }
+      if (gridExists > 0) {
+        // 在容器内部滚动
+        await page.locator(gridSelector).evaluate((el) => {
+          el.scrollTop += 600; // 向下滚动 600 像素
+        });
       } else {
-        await page.mouse.wheel(0, 800);
+        // 备选方案：鼠标滚轮
+        await page.mouse.wheel(0, 600);
       }
-      await page.waitForTimeout(1200); // 给 React 渲染留出充足时间
+      // 关键：给 React 虚拟列表留出渲染新 DOM 的时间
+      await page.waitForTimeout(1000);
     } catch (e) {
       log('warn', `滚动异常: ${e.message}`);
     }
