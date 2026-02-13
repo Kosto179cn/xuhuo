@@ -154,36 +154,40 @@ async function getMessageContent() {
   return message;
 }
 
-// 查找并点击用户 (优化版：增加调试日志和精准定位)
+// 查找并点击用户 (修正版)
 async function findAndClickUser(page, username) {
-  // log('info', `正在查找用户: ${username}`); // 减少刷屏
-
   try {
-    // 1. 尝试直接使用 Playwright 的文本定位器 (最准确，忽略 class 变化)
-    // 使用 exact: true 确保完全匹配，防止"张三"匹配到"张三丰"
-    const userLocator = page.getByText(username, { exact: true });
+    // 1. 使用 XPath 查找包含目标文本的特定类名元素
+    // 这样可以精确定位到类名包含 "item-header-name-" 且文本完全匹配的 span
+    const xpath = `//span[contains(@class, 'item-header-name-') and text()='${username}']`;
+    const userElement = page.locator(xpath);
 
-    // 检查是否可见
-    if (await userLocator.isVisible()) {
-        log('success', `通过文本定位找到用户: ${username}`);
-        await userLocator.click();
+    // 2. 检查元素是否存在且可见
+    const count = await userElement.count();
+    if (count > 0) {
+      // 检查是否真的可见
+      if (await userElement.first().isVisible()) {
+        log('success', `找到用户: ${username}`);
+
+        // 关键：点击该用户的整行容器，而不是只点击名字文本
+        // 向上寻找最近的 li 或具备点击属性的父级
+        await userElement.first().click({ force: true });
         return true;
+      }
     }
 
-    // 2. 如果上面的没找到，打印当前屏幕上看到了谁 (用于调试)
-    // 这一步非常重要，能帮你确认是因为名字写错了，还是真的没加载出来
+    // 3. 调试日志：打印当前所有可见的名字，方便核对
     const visibleNames = await page.$$eval('[class*="item-header-name-"]', elements =>
       elements.map(el => el.textContent.trim())
     );
-    // 只在第一次滚动时打印，避免日志太长
-    if (global.debugLogCounter === undefined || global.debugLogCounter < 1) {
-       log('info', `当前屏幕可见用户: ${visibleNames.join(', ')}`);
-       global.debugLogCounter = (global.debugLogCounter || 0) + 1;
+
+    if (global.debugLogCounter === 0) {
+       log('info', `当前列表内包含: ${visibleNames.join(' | ')}`);
+       global.debugLogCounter++;
     }
 
     return false;
   } catch (error) {
-    // 忽略定位超时的错误，继续滚动
     return false;
   }
 }
