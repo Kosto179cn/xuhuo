@@ -1,0 +1,12 @@
+{
+  "multiTask": true,
+  "taskCount": 5,
+  "proxyAddress": "",
+  "messageTemplate": "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]",
+  "hitokotoTypes": [
+    "文学",
+    "影视",
+    "诗词",
+    "哲学"
+  ]
+}
