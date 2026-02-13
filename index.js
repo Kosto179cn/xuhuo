@@ -32,10 +32,11 @@ const CONFIG = {
   messageTemplate: process.env.MESSAGE_TEMPLATE || 
     '—————每日续火—————\n\n[TXTAPI]\n\n—————每日一言—————\n\n[API]\n\n—————专属一言—————\n\n[专属一言]',
   
-  // 超时设置
-  pageTimeout: 30000,
-  userSearchTimeout: 10000,
-  apiTimeout: 10000
+  // 超时设置（GitHub Actions 网络较慢，增加超时时间）
+  pageTimeout: 120000,  // 页面加载超时 2 分钟
+  userSearchTimeout: 30000,  // 用户查找超时 30 秒
+  apiTimeout: 30000,  // API 超时 30 秒
+  gotoTimeout: 120000  // 页面跳转超时 2 分钟
 };
 
 // 发送记录（内存中，每次运行重置）
@@ -158,8 +159,10 @@ async function findAndClickUser(page, username) {
   log('info', `正在查找用户: ${username}`);
   
   try {
-    // 等待聊天列表加载
-    await page.waitForSelector('[class*="item-header-name-"]', { timeout: CONFIG.userSearchTimeout });
+    // 等待聊天列表加载（增加超时时间）
+    await page.waitForSelector('[class*="item-header-name-"]', { 
+      timeout: CONFIG.userSearchTimeout * 2 
+    });
     
     // 获取所有用户元素
     const userElements = await page.$$('[class*="item-header-name-"]');
@@ -284,7 +287,15 @@ async function main() {
   log('info', '正在启动无头浏览器...');
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',  // 解决 /dev/shm 过小的问题
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process',  // 单进程模式，减少内存使用
+      '--disable-blink-features=AutomationControlled'  // 隐藏自动化特征
+    ]
   });
   
   const context = await browser.newContext({
@@ -299,16 +310,38 @@ async function main() {
   try {
     // 访问抖音创作者中心
     log('info', `正在访问 ${CONFIG.url}`);
-    await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: CONFIG.pageTimeout });
     
-    // 等待页面加载
-    await page.waitForTimeout(2000);
+    // 设置页面监听
+    page.on('response', response => {
+      if (response.status() >= 400) {
+        log('warn', `请求失败: ${response.url()} - ${response.status()}`);
+      }
+    });
+    
+    await page.goto(CONFIG.url, { 
+      waitUntil: 'domcontentloaded',  // 改用更宽松的等待条件
+      timeout: CONFIG.gotoTimeout || 120000 
+    });
+    
+    // 额外等待一段时间，确保页面完全加载
+    log('info', '等待页面渲染...');
+    await page.waitForTimeout(8000);
     
     // 检查是否需要重新登录
     const pageTitle = await page.title();
-    if (pageTitle.includes('登录') || page.url().includes('login')) {
+    const currentUrl = page.url();
+    log('info', `当前页面: ${currentUrl}`);
+    
+    if (pageTitle.includes('登录') || currentUrl.includes('login')) {
       log('error', '需要重新登录，请更新 Cookies');
       return;
+    }
+    
+    // 检查页面是否有内容
+    const hasContent = await page.$('[class*="item-header-name-"]');
+    if (!hasContent) {
+      log('warn', '页面未检测到聊天列表，可能需要滚动等待');
+      await page.waitForTimeout(5000);
     }
     
     log('success', '页面加载成功');
