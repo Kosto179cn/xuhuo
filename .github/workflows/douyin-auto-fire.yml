@@ -2,9 +2,8 @@ name: 抖音续火花自动任务
 
 on:
   schedule:
-    # 每天北京时间 00:01 运行 (UTC 前一天 16:01)
     - cron: '1 16 * * *'
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   auto-fire:
@@ -20,39 +19,24 @@ jobs:
           node-version: '18'
       
       - name: 安装依赖
-        run: npm install
+        run: |
+          npm install axios playwright
       
       - name: 安装 Playwright 浏览器
         run: npx playwright install chromium
       
       - name: 运行自动发送脚本
         env:
-          # 抖音 Cookies（需要在 GitHub Secrets 中配置）
           DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
-          
-          # 目标用户列表（可选，不设置则读取 users.txt 文件）
-          # TARGET_USERS: ${{ secrets.TARGET_USERS }}
-          
-          # 手动文案（可选）
-          TXT_MANUAL_TEXT: ${{ secrets.TXT_MANUAL_TEXT }}
-          
-          # 专属一言文案（可选）
-          SPECIAL_MONDAY: ${{ secrets.SPECIAL_MONDAY }}
-          SPECIAL_TUESDAY: ${{ secrets.SPECIAL_TUESDAY }}
-          SPECIAL_WEDNESDAY: ${{ secrets.SPECIAL_WEDNESDAY }}
-          SPECIAL_THURSDAY: ${{ secrets.SPECIAL_THURSDAY }}
-          SPECIAL_FRIDAY: ${{ secrets.SPECIAL_FRIDAY }}
-          SPECIAL_SATURDAY: ${{ secrets.SPECIAL_SATURDAY }}
-          SPECIAL_SUNDAY: ${{ secrets.SPECIAL_SUNDAY }}
-          
-          # 消息模板（可选）
+          TARGET_USERS: ${{ secrets.TARGET_USERS }}
           MESSAGE_TEMPLATE: ${{ secrets.MESSAGE_TEMPLATE }}
         run: node index.js
       
-      - name: 上传日志
+      # === 关键改动：如果失败或运行结束，上传截图供你下载排查 ===
+      - name: 上传调试截图
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: execution-logs
-          path: ${{ github.workspace }}/logs/*.log
-          retention-days: 7
+          name: debug-screenshots
+          path: "*.png"
+          retention-days: 3
