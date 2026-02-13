@@ -19,8 +19,7 @@ jobs:
           node-version: '18'
       
       - name: 安装依赖
-        run: |
-          npm install axios playwright
+        run: npm install axios playwright
       
       - name: 安装 Playwright 浏览器
         run: npx playwright install chromium
@@ -29,14 +28,12 @@ jobs:
         env:
           DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
           TARGET_USERS: ${{ secrets.TARGET_USERS }}
-          MESSAGE_TEMPLATE: ${{ secrets.MESSAGE_TEMPLATE }}
         run: node index.js
       
-      # === 关键改动：如果失败或运行结束，上传截图供你下载排查 ===
-      - name: 上传调试截图
+      - name: 上传错误截图 (失效时必看)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
-          path: "*.png"
+          path: "*.png" # index.js 报错时生成的截图
           retention-days: 3
