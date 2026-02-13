@@ -157,26 +157,18 @@ async function getMessageContent() {
 // 查找并点击用户 (修正版)
 async function findAndClickUser(page, username) {
   try {
-    // 1. 使用 XPath 查找包含目标文本的特定类名元素
-    // 这样可以精确定位到类名包含 "item-header-name-" 且文本完全匹配的 span
-    const xpath = `//span[contains(@class, 'item-header-name-') and text()='${username}']`;
-    const userElement = page.locator(xpath);
+    // 匹配包含 'item-header-name-' 类的 span，且文本内容去除空格后等于目标
+    const xpath = `//span[contains(@class, 'item-header-name-') and normalize-space(text())='${username}']`;
+    const userLocator = page.locator(xpath);
 
-    // 2. 检查元素是否存在且可见
-    const count = await userElement.count();
-    if (count > 0) {
-      // 检查是否真的可见
-      if (await userElement.first().isVisible()) {
-        log('success', `找到用户: ${username}`);
-
-        // 关键：点击该用户的整行容器，而不是只点击名字文本
-        // 向上寻找最近的 li 或具备点击属性的父级
-        await userElement.first().click({ force: true });
-        return true;
-      }
+    if (await userLocator.isVisible()) {
+      log('success', `找到并准备点击用户: ${username}`);
+      // 强制点击，防止被层级遮挡
+      await userLocator.click({ force: true, timeout: 2000 });
+      return true;
     }
 
-    // 3. 调试日志：打印当前所有可见的名字，方便核对
+    // 调试日志：打印当前所有可见的名字
     const visibleNames = await page.$$eval('[class*="item-header-name-"]', elements =>
       elements.map(el => el.textContent.trim())
     );
@@ -192,60 +184,52 @@ async function findAndClickUser(page, username) {
   }
 }
 
-// 滚动查找用户 (优化版：使用鼠标滚轮触发虚拟列表加载)
+// 滚动查找用户 (优化版：动态容器定位)
 async function scrollAndFindUser(page, username) {
   log('info', `开始滚动查找用户: ${username}`);
-
-  // 重置调试计数器
   global.debugLogCounter = 0;
 
-  const maxScrolls = 50; // 增加滚动次数，虚拟列表可能很长
-  let scrollCount = 0;
+  // 1. 动态获取容器：抖音的列表通常是 role="grid" 或带有特定 class
+  // 尝试多个可能的选择器
+  const selectors = ['.ReactVirtualized__Grid', '[role="grid"]', '.chat-list-container'];
+  let gridElement = null;
 
-  // 定位滚动容器 (根据你的 HTML 结构)
-  const gridSelector = '.ReactVirtualized__Grid';
-
-  // 确保容器存在
-  try {
-    await page.waitForSelector(gridSelector, { timeout: 5000 });
-  } catch (e) {
-    log('error', '未找到聊天列表容器，无法滚动');
-    return false;
+  for (const s of selectors) {
+    const el = await page.$(s);
+    if (el) {
+      gridElement = el;
+      log('info', `定位到容器: ${s}`);
+      break;
+    }
   }
 
-  while (scrollCount < maxScrolls) {
-    // 1. 先尝试查找并点击
+  if (!gridElement) {
+    log('error', '未找到聊天列表容器，尝试在全页面级别滚动');
+    // 如果找不到容器，退而求其次，在页面中心滚动
+    await page.mouse.move(500, 500);
+  }
+
+  const maxScrolls = 60;
+  for (let i = 0; i < maxScrolls; i++) {
     const found = await findAndClickUser(page, username);
-    if (found) {
-      return true;
-    }
+    if (found) return true;
 
-    // 2. 执行滚动 (关键修改：使用鼠标滚轮)
+    // 执行滚动
     try {
-      // 获取列表容器的位置
-      const box = await page.locator(gridSelector).boundingBox();
-      if (box) {
-        // 将鼠标移动到列表中心
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        // 模拟鼠标滚轮向下滚动 (X, Y)
-        await page.mouse.wheel(0, 600);
-
-        // 3. 等待 React 渲染新行 (虚拟列表需要时间加载 DOM)
-        // 如果网速慢或电脑卡，可以适当增加这个时间
-        await page.waitForTimeout(1000);
+      if (gridElement) {
+        const box = await gridElement.boundingBox();
+        if (box) {
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await page.mouse.wheel(0, 800); // 增加滚动幅度
+        }
       } else {
-        log('warn', '无法获取列表位置，尝试使用键盘翻页');
-        await page.keyboard.press('PageDown');
-        await page.waitForTimeout(1000);
+        await page.mouse.wheel(0, 800);
       }
-    } catch (error) {
-      log('warn', `滚动时出错: ${error.message}`);
+      await page.waitForTimeout(1200); // 给 React 渲染留出充足时间
+    } catch (e) {
+      log('warn', `滚动异常: ${e.message}`);
     }
-
-    scrollCount++;
   }
-
-  log('warn', `已滚动到底或达到最大次数，仍未找到用户: ${username}`);
   return false;
 }
 
@@ -327,6 +311,7 @@ async function main() {
   });
   
   const context = await browser.newContext({
+    viewport: { width: 1920, height: 1080 }, // 设置大分辨率，确保列表能加载更多内容
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });
   
