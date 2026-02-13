@@ -15,7 +15,33 @@
 
 ## 使用前准备
 
-### 1. 获取抖音 Cookies
+### 1. 获取目标用户列表（两种方式任选）
+
+**方式一：自动抓取（推荐）**
+
+1. 在浏览器中登录抖音创作者中心聊天页面：https://creator.douyin.com/creator-micro/data/following/chat
+2. 按 F12 打开开发者工具，进入 Console 标签
+3. 滚动聊天列表，确保所有需要的好友都已加载
+4. 复制 `generate-users.js` 文件内容，粘贴到控制台并回车
+5. 脚本会自动生成 `users.txt` 文件并下载
+
+**方式二：手动编辑**
+
+1. 在项目根目录创建 `users.txt` 文件
+2. 每行写一个用户名
+3. 以 `#` 开头的行为注释，会被忽略
+
+`users.txt` 示例：
+```
+# 目标用户列表
+# 每行一个用户名
+
+用户A
+用户B
+用户C
+```
+
+### 2. 获取抖音 Cookies
 
 1. 在浏览器中登录抖音创作者中心：https://creator.douyin.com/
 2. 按 F12 打开开发者工具
@@ -33,12 +59,16 @@
 
 ### 2. 配置 GitHub Secrets
 
+### 3. 配置 GitHub Secrets（可选）
+
+如果不需要使用 `TARGET_USERS` 环境变量，可以直接编辑仓库中的 `users.txt` 文件。
+
 在你的 GitHub 仓库中设置以下 Secrets（Settings -> Secrets and variables -> Actions）:
 
 | Secret 名称 | 说明 | 示例 |
 |------------|------|------|
 | `DOUYIN_COOKIES` | 抖音 Cookies JSON 字符串 | `[{"name":"xxx","value":"xxx",...}]` |
-| `TARGET_USERS` | 目标用户列表（每行一个） | `用户1\n用户2\n用户3` |
+| `TARGET_USERS` | 目标用户列表（可选，不设置则读取 `users.txt` 文件） | `用户1\n用户2\n用户3` |
 | `TXT_MANUAL_TEXT` | 手动文案库（可选） | `早安\n晚安` |
 | `SPECIAL_MONDAY` | 周一专属文案（可选） | `周一文案1\n周一文案2` |
 | `SPECIAL_TUESDAY` | 周二专属文案（可选） | `周二文案1\n周二文案2` |

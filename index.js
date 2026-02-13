@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const { readFileSync } = require('fs');
 const axios = require('axios');
 
 // 配置
@@ -6,8 +7,8 @@ const CONFIG = {
   // 抖音聊天页面
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
   
-  // 目标用户列表（每行一个用户名）
-  targetUsers: process.env.TARGET_USERS || '',
+  // 目标用户列表（从文件读取，环境变量优先）
+  targetUsers: process.env.TARGET_USERS || readUsersFromFile() || '',
   
   // 发送消息配置
   useHitokoto: true,
@@ -45,6 +46,20 @@ let fireDays = 1;
 function log(level, message) {
   const timestamp = new Date().toLocaleTimeString();
   console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`);
+}
+
+// 从文件读取用户列表
+function readUsersFromFile() {
+  try {
+    const content = readFileSync('./users.txt', 'utf-8');
+    const lines = content.split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && !line.startsWith('#'));
+    return lines.join('\n');
+  } catch (error) {
+    log('warn', '未找到 users.txt 文件，使用默认配置');
+    return '';
+  }
 }
 
 // 获取一言内容
