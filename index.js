@@ -1,13 +1,20 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 // === 配置区 ===
 const CONFIG = {
+  // 抖音创作者后台私信页面URL（根据实际路径调整）
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  targetUsers: process.env.TARGET_USERS || 'lb\n哎哎哎哎哎哎哎哎哎唉\n鸡排炸虾🍤',
+  // 从users.txt文件读取目标用户，文件不存在时使用默认值
+  targetUsers: fs.existsSync(path.join(__dirname, 'users.txt'))
+    ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
+    : 'lb\n哎哎哎哎哎哎哎哎哎唉\n鸡排炸虾🍤',
   messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
   gotoTimeout: 60000
 };
+
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
