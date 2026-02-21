@@ -18,75 +18,47 @@ const CONFIG = {
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
-// 获取今日节日（无 Key）
-async function getFestival() {
-  try {
-    const today = new Date().toISOString().split('T')[0]; // 格式：YYYY-MM-DD
-    const { data } = await axios.get(`https://api.oioweb.cn/api/holiday?date=${today}`);
-    if (data.code === 200 && data.result && data.result.name) {
-      return data.result.name;
-    }
-  } catch (e) {
-    console.log('节日获取失败:', e.message);
-  }
-  return null;
-}
 
-// 获取今日天气（无 Key，示例城市：北京，可修改）
-async function getWeather() {
-  try {
-    // 使用心知天气的免费无 Key 接口（有调用频率限制）
-    const { data } = await axios.get('https://www.tianqiapi.com/api?version=v6&appid=1001&appsecret=123456&city=深圳');
-    if (data && data.wea && data.tem) {
-      return {
-        city: data.city,
-        text: data.wea,
-        temp: data.tem,
-        tem1: data.tem1,
-        tem2: data.tem2,
-        win: data.win,
-        win_speed: data.win_speed
-      };
-    }
-  } catch (e) {
-    console.log('天气获取失败:', e.message);
-  }
-  return null;
-}
-
-// 生成问候语
-async function generateDailyGreeting() {
-  const weather = await getWeather();
-  const festival = await getFestival();
-  
-  let greeting = '';
-  
-  if (festival) {
-    greeting += `今天是${festival}，祝你节日快乐呀！\n`;
-  }
-  
-  if (weather) {
-    const { city, text, temp, tem1, tem2, win, win_speed } = weather;
-    greeting += `今日${city}天气：${text}，气温${temp}°C（${tem2}~${tem1}°C），${win} ${win_speed}。`;
-    
-    if (parseInt(temp) < 10) {
-      greeting += ' 天气有点冷，记得多穿件衣服，注意保暖哦～';
-    } else if (parseInt(temp) > 30) {
-      greeting += ' 天气炎热，注意防暑降温，多补充水分～';
-    } else if (text.includes('雨')) {
-      greeting += ' 今天有雨，出门记得带伞，注意安全～';
-    }
-  } else {
-    greeting += '今天也要元气满满，保持热爱，奔赴山海。';
-  }
-  
-  return greeting;
-}
-
-// 替换原来的 getHitokoto
+// 三合一：一言 + 天气 + 节日日历（你提供的2个接口）
 async function getHitokoto() {
-  return await generateDailyGreeting();
+  try {
+    // 1. 获取一言
+    const { data: hitokotoData } = await axios.get('https://v1.hitokoto.cn/');
+    const yiyan = `${hitokotoData.hitokoto} —— ${hitokotoData.from}`;
+
+    // 2. 获取天气（深圳，可自己改城市）
+    const { data: weatherData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
+    const city = weatherData.city;
+    const weather = weatherData.weather;
+    const temp = weatherData.temperature;
+    const wind = weatherData.wind_direction;
+    const windPower = weatherData.wind_power;
+
+    // 3. 获取节日/日历
+    const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar');
+    const dayInfo = holidayData.days[0];
+    const weekday = dayInfo.weekday_cn;
+    const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
+    const festivalName = dayInfo.legal_holiday_name || '';
+
+    // 拼接文案
+    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+
+    if (festivalName) {
+      msg += `，今日节日：${festivalName}`;
+    }
+
+    msg += `\n${yiyan}`;
+
+    return msg;
+
+  } catch (e) {
+    // 任何接口挂了都不崩，保底文案
+    return '保持热爱，奔赴山海。';
+  }
 }
+
+
 
 
 /**
