@@ -41,12 +41,12 @@ function fixCookies(rawCookies) {
     } else {
       delete cookie.sameSite; // 空字符串也必须删除
     }
-    
+
     // 2. 移除 Playwright 不支持的字段（如 storeId, hostOnly 等）
     delete cookie.storeId;
     delete cookie.hostOnly;
     delete cookie.session;
-    
+
     return cookie;
   });
 }
@@ -86,7 +86,7 @@ async function scrollAndFindUser(page, username) {
 
 async function main() {
   const targetUsers = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
-  
+
   let rawCookies;
   try {
     rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
@@ -111,7 +111,7 @@ async function main() {
 
     log('info', '🚀 正在进入抖音页面...');
     await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded', timeout: CONFIG.gotoTimeout });
-    
+
     await page.waitForTimeout(10000); // 预留加载时间
 
     // 检查是否重定向到登录页
@@ -121,19 +121,29 @@ async function main() {
       return;
     }
 
+    // ======================
+    // 下面是帮你实现的逻辑：
+    // 1. 先处理能找到的用户
+    // 2. 找不到的先存起来
+    // 3. 全部发完后，再重试失败的
+    // ======================
 
-for (const user of targetUsers) {
-      const found = await scrollAndFindUser(page, user);
-      if (!found) {
-        log('error', `❌ 找不到用户: ${user}`);
-        continue;
-      }
+    // 存放失败的用户
+    const failedUsers = [];
 
-      await page.waitForTimeout(2000);
-
-      // 定位输入框并发送
-      const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+    // 第一次：正常发送，失败先跳过
+    for (const user of targetUsers) {
       try {
+        const found = await scrollAndFindUser(page, user);
+        if (!found) {
+          log('warn', `⚠️ 暂时找不到用户: ${user}，最后统一重试`);
+          failedUsers.push(user);
+          continue;
+        }
+
+        await page.waitForTimeout(2000);
+
+        const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
         await page.waitForSelector(inputSelector, { timeout: 8000 });
         const hitokoto = await getHitokoto();
         const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
@@ -145,13 +155,55 @@ for (const user of targetUsers) {
         log('success', `✨ 已发给: ${user}`);
         await page.waitForTimeout(3000); 
       } catch (e) {
-        log('error', `❌ ${user} 聊天窗口加载失败`);
-        await page.screenshot({ path: `ERROR_${user}.png` });
+        log('error', `❌ ${user} 异常，加入重试列表`);
+        failedUsers.push(user);
+        await page.screenshot({ path: `ERROR_${user}.png` }).catch(() => {});
       }
     }
+
+        // 第二次：重试失败的用户（每个重试3次）
+    if (failedUsers.length > 0) {
+      log('info', `🔁 开始重试失败用户，共 ${failedUsers.length} 个`);
+      const MAX_RETRY = 3;
+
+      for (const user of failedUsers) {
+        let success = false;
+
+        for (let i = 1; i <= MAX_RETRY; i++) {
+          try {
+            log('info', `🔁 重试用户 ${user} 第 ${i}/${MAX_RETRY} 次`);
+            const found = await scrollAndFindUser(page, user);
+            if (!found) throw new Error('找不到用户');
+
+            await page.waitForTimeout(2000);
+            const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+            await page.waitForSelector(inputSelector, { timeout: 8000 });
+
+            const hitokoto = await getHitokoto();
+            const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
+            
+            await page.focus(inputSelector);
+            await page.fill(inputSelector, finalMsg);
+            await page.keyboard.press('Enter');
+            
+            log('success', `✅ 重试成功: ${user}`);
+            success = true;
+            break;
+          } catch (e) {
+            log('error', `❌ ${user} 第 ${i} 次失败: ${e.message}`);
+            await page.waitForTimeout(2000);
+          }
+        }
+
+        if (!success) {
+          log('error', `💀 ${user} 全部重试失败，已跳过`);
+        }
+      }
+    }
+
   } catch (e) {
     log('error', `致命错误: ${e.message}`);
-    await page.screenshot({ path: 'FATAL_ERROR.png' });
+    await page.screenshot({ path: 'FATAL_ERROR.png' }).catch(() => {});
   } finally {
     await browser.close();
     log('info', '🏁 任务结束');
