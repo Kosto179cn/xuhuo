@@ -121,26 +121,40 @@ async function main() {
       return;
     }
 
+
+
+async function main() {
+  const targetUsers = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+
+  // …Cookie、浏览器相关初始化不变…
+
+  try {
+    // …Cookie注入和进入页面部分不变…
+
+    const retryUsers = [];
+
+    // 第一次循环：正常处理，未找到的用户记录下来
     for (const user of targetUsers) {
       const found = await scrollAndFindUser(page, user);
       if (!found) {
-        log('error', `❌ 找不到用户: ${user}`);
+        log('error', `❌ 找不到用户: ${user}，加入重试列表`);
+        retryUsers.push(user);
         continue;
       }
 
       await page.waitForTimeout(2000);
 
-      // 定位输入框并发送
+      // 发送消息
       const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
       try {
         await page.waitForSelector(inputSelector, { timeout: 8000 });
         const hitokoto = await getHitokoto();
         const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
-        
+
         await page.focus(inputSelector);
         await page.fill(inputSelector, finalMsg);
         await page.keyboard.press('Enter');
-        
+
         log('success', `✨ 已发给: ${user}`);
         await page.waitForTimeout(3000); 
       } catch (e) {
@@ -148,6 +162,40 @@ async function main() {
         await page.screenshot({ path: `ERROR_${user}.png` });
       }
     }
+
+    // 第二次循环：处理未找到的用户
+    if (retryUsers.length > 0) {
+      log('info', `⏰ 正在重试未找到的用户: ${retryUsers.join(', ')}`);
+      for (const user of retryUsers) {
+        const found = await scrollAndFindUser(page, user);
+        if (!found) {
+          log('error', `❌ 再次找不到用户: ${user}，彻底跳过`);
+          continue;
+        }
+
+        await page.waitForTimeout(2000);
+
+        // 发送消息
+        const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+        try {
+          await page.waitForSelector(inputSelector, { timeout: 8000 });
+          const hitokoto = await getHitokoto();
+          const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
+
+          await page.focus(inputSelector);
+          await page.fill(inputSelector, finalMsg);
+          await page.keyboard.press('Enter');
+
+          log('success', `✨ （重试）已发给: ${user}`);
+          await page.waitForTimeout(3000); 
+        } catch (e) {
+          log('error', `❌ （重试）${user} 聊天窗口加载失败`);
+          await page.screenshot({ path: `ERROR_RETRY_${user}.png` });
+        }
+      }
+    }
+
+  // …后续的 catch, finally 不变…
   } catch (e) {
     log('error', `致命错误: ${e.message}`);
     await page.screenshot({ path: 'FATAL_ERROR.png' });
@@ -157,4 +205,5 @@ async function main() {
   }
 }
 
+// …结尾 main() 不变…
 main();
