@@ -149,8 +149,19 @@ async function main() {
         const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
         
         await page.focus(inputSelector);
-        await page.fill(inputSelector, finalMsg);
-        await page.keyboard.press('Enter');
+await page.fill(inputSelector, '');
+
+for (const c of finalMsg) {
+  if (c === '\n') {
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('Enter');
+    await page.keyboard.up('Shift');
+  } else {
+    await page.keyboard.type(c);
+  }
+}
+
+await page.keyboard.press('Enter');
         
         log('success', `✨ 已发给: ${user}`);
         await page.waitForTimeout(3000); 
