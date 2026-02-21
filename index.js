@@ -122,40 +122,68 @@ async function main() {
     }
 
 
+// 新增重试用户列表
+const retryUsers = [];
 
 for (const user of targetUsers) {
-      const found = await scrollAndFindUser(page, user);
-      if (!found) {
-        log('error', `❌ 找不到用户: ${user}`);
-        continue;
-      }
+  const found = await scrollAndFindUser(page, user);
+  if (!found) {
+    log('error', `❌ 找不到用户: ${user}，加入重试列表`);
+    retryUsers.push(user);
+    continue;
+  }
 
-      await page.waitForTimeout(2000);
+  await page.waitForTimeout(2000);
 
-      // 定位输入框并发送
-      const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
-      try {
-        await page.waitForSelector(inputSelector, { timeout: 8000 });
-        const hitokoto = await getHitokoto();
-        const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
-        
-        await page.focus(inputSelector);
-        await page.fill(inputSelector, finalMsg);
-        await page.keyboard.press('Enter');
-        
-        log('success', `✨ 已发给: ${user}`);
-        await page.waitForTimeout(3000); 
-      } catch (e) {
-        log('error', `❌ ${user} 聊天窗口加载失败`);
-        await page.screenshot({ path: `ERROR_${user}.png` });
-      }
-    }
+  // 定位输入框并发送
+  const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+  try {
+    await page.waitForSelector(inputSelector, { timeout: 8000 });
+    const hitokoto = await getHitokoto();
+    const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
+    
+    await page.focus(inputSelector);
+    await page.fill(inputSelector, finalMsg);
+    await page.keyboard.press('Enter');
+    
+    log('success', `✨ 已发给: ${user}`);
+    await page.waitForTimeout(3000); 
   } catch (e) {
-    log('error', `致命错误: ${e.message}`);
-    await page.screenshot({ path: 'FATAL_ERROR.png' });
-  } finally {
-    await browser.close();
-    log('info', '🏁 任务结束');
+    log('error', `❌ ${user} 聊天窗口加载失败`);
+    await page.screenshot({ path: `ERROR_${user}.png` });
   }
 }
+
+// 再次尝试处理重试用户
+if (retryUsers.length > 0) {
+  log('info', `⏰ 正在重试未找到的用户: ${retryUsers.join(', ')}`);
+  for (const user of retryUsers) {
+    const found = await scrollAndFindUser(page, user);
+    if (!found) {
+      log('error', `❌ 再次找不到用户: ${user}，彻底跳过`);
+      continue;
+    }
+
+    await page.waitForTimeout(2000);
+
+    // 定位输入框并发送
+    const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+    try {
+      await page.waitForSelector(inputSelector, { timeout: 8000 });
+      const hitokoto = await getHitokoto();
+      const finalMsg = CONFIG.messageTemplate.replace('[API]', hitokoto);
+
+      await page.focus(inputSelector);
+      await page.fill(inputSelector, finalMsg);
+      await page.keyboard.press('Enter');
+
+      log('success', `✨ （重试）已发给: ${user}`);
+      await page.waitForTimeout(3000); 
+    } catch (e) {
+      log('error', `❌ （重试）${user} 聊天窗口加载失败`);
+      await page.screenshot({ path: `ERROR_RETRY_${user}.png` });
+    }
+  }
+}
+
 main();
