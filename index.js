@@ -11,7 +11,7 @@ const CONFIG = {
   targetUsers: fs.existsSync(path.join(__dirname, 'users.txt'))
     ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
     : 'lb\n哎哎哎哎哎哎哎哎哎唉\n鸡排炸虾🍤',
-  messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
+  messageTemplate: process.env.MESSAGE_TEMPLATE || '———每日续🔥(˘͈ᵕ ˘͈❀)———\n\n[API]',
   gotoTimeout: 60000
 };
 
@@ -106,7 +106,7 @@ async function getHitokoto() {
     // 最终文案（已去掉标题）
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
-    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n\n接抖音续火花5米-30米/月 有需直接发信息即可`;
+    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5米-30米/月 有需直接此处发信息`;
 
     return msg;
   } catch (e) {
