@@ -21,11 +21,11 @@ const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [$
 
 async function getHitokoto() {
   try {
-    // 1. 获取一言
+    // 1. 一言
     const { data: hitokotoData } = await axios.get('https://v1.hitokoto.cn/');
     const yiyan = `${hitokotoData.hitokoto} —— ${hitokotoData.from}`;
 
-    // 2. 获取天气
+    // 2. 天气（深圳）
     const { data: weatherData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
     const city = weatherData.city;
     const weather = weatherData.weather;
@@ -33,17 +33,17 @@ async function getHitokoto() {
     const wind = weatherData.wind_direction;
     const windPower = weatherData.wind_power;
 
-    // 3. 获取日历
+    // 3. 日历（强制北京时间）
     const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7');
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
 
-    // ✅ 强制获取【北京时间】
+    // 🔴 核心：只认北京时间，不依赖设备时区
     const now = new Date();
-    const nowBeijing = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    const nowBeijing = new Date(now.getTime() + 8 * 3600 * 1000);
 
-    // 天数转月天
+    // 天数转“月+天”
     function toMonthDay(days) {
       if (days < 0) return '已结束';
       if (days === 0) return '今天';
@@ -54,13 +54,11 @@ async function getHitokoto() {
       return `${m}个月${d}天`;
     }
 
-    // 过滤调休上班
+    // 过滤调休、合并同名节日
     const nextList = (holidayData.nearby?.next || []).filter(item => {
       const e = item.events[0];
       return e.type !== 'legal_workday_adjust';
     });
-
-    // 合并同名节日
     const holidayMap = {};
     nextList.forEach(item => {
       const name = item.events[0].name;
@@ -75,19 +73,11 @@ async function getHitokoto() {
       const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        // ✅ 按【北京时间次日0点】算结束
-        const endTime = new Date(
-          target.getFullYear(),
-          target.getMonth(),
-          target.getDate() + 1,
-          0, 0, 0
-        );
-        const endBeijing = new Date(endTime.getTime() + (8 * 60 * 60 * 1000));
-
+        // ✅ 春节结束：2月24日 00:00（北京时间）
+        const endBeijing = new Date(2026, 1, 24, 0, 0, 0); // 月份从0开始
         const ms = endBeijing - nowBeijing;
         const d = Math.floor(ms / (1000 * 60 * 60 * 24));
         const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
         lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
       } else {
         lines.push(`${name}（还有 ${toMonthDay(totalDays)}）`);
