@@ -18,94 +18,88 @@ const CONFIG = {
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
-/**
- * 核心：获取天气、假期、热搜、一言
- * 函数内部不带标题，保证不重复
- */
 async function getHitokoto() {
   try {
-    const fetchOpt = { timeout: 5000 };
+    const fetchOpt = { timeout: 6000 };
+    log('info', '正在请求 API 数据...');
+
     const [hitoRes, weatherRes, holidayRes, hotRes] = await Promise.allSettled([
       axios.get('https://v1.hitokoto.cn/', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7', fetchOpt),
+      axios.get('https://api.vvhan.com/api/weather?city=深圳', fetchOpt),
+      axios.get('https://timor.tech/api/holiday/next/', fetchOpt), 
       axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10', fetchOpt)
     ]);
 
     let segments = [];
 
-    // 1. 处理天气和日历
-    if (weatherRes.status === 'fulfilled' && weatherRes.value.data.code === 200) {
+    // --- 1. 处理天气 (韩小韩 API) ---
+    if (weatherRes.status === 'fulfilled') {
       const w = weatherRes.value.data;
-      const hData = holidayRes.status === 'fulfilled' ? holidayRes.value.data : { days: [{}] };
-      const dayInfo = hData.days[0] || {};
-      
-      const weatherLine = `今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}，${dayInfo.weekday_cn || ''}，农历${dayInfo.lunar_month_name || ''}${dayInfo.lunar_day_name || ''}`;
-      segments.push(weatherLine);
-
-      // 处理假期倒计时
-      if (hData.nearby?.next) {
-        const nowBeijing = new Date();
-        const nextList = hData.nearby.next.filter(item => item.events[0].type === 'legal_rest');
-        const groups = {};
-        nextList.forEach(item => {
-          const name = item.events[0].name;
-          if (!groups[name]) groups[name] = [];
-          groups[name].push(item.date);
-        });
-
-        let holidayLines = [];
-        for (const name in groups) {
-          const days = groups[name];
-          const firstDay = new Date(days[0]);
-          const lastDay = new Date(days[days.length - 1]);
-
-          if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-            // 正在放假
-            const endDate = new Date(lastDay);
-            endDate.setHours(23, 59, 59);
-            const ms = endDate - nowBeijing;
-            const d = Math.floor(ms / (1000 * 60 * 60 * 24));
-            const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-            holidayLines.push(`${name}（假期还剩 ${d}天${h}小时）`);
-          } else {
-            // 等待假期
-            const diffMs = firstDay.getTime() - nowBeijing.getTime();
-            const totalDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-            if (totalDays >= 0) {
-              const m = Math.floor(totalDays / 30);
-              const d = totalDays % 30;
-              const timeStr = m === 0 ? `${d}天` : (d === 0 ? `${m}个月` : `${m}个月${d}天`);
-              holidayLines.push(`${name}（还有 ${timeStr}）`);
-            }
-          }
-        }
-        if (holidayLines.length) segments.push(`最近假期：\n${holidayLines.join('\n')}`);
+      // 增加容错：有的 API 返回 w.info，有的直接在 w 下面
+      const info = w.info || w.data || w; 
+      if (w.success || w.city) {
+        const type = info.type || info.weather || "未知天气";
+        const high = info.high || "";
+        const low = info.low || "";
+        const week = info.week || w.week || "";
+        segments.push(`今日${w.city || '深圳'}：${type}，${low} ~ ${high}，${week}`);
+      } else {
+        log('warn', '天气数据格式不匹配');
       }
     }
 
-    // 2. 处理热搜
-    if (hotRes.status === 'fulfilled' && hotRes.value.data.list) {
-      const hotList = hotRes.value.data.list
-        .slice(0, 5)
-        .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
-        .join('\n');
-      segments.push(`由我为您推荐今日抖音热搜 TOP5：\n${hotList}`);
+    // --- 2. 处理假期 (Timor API) ---
+    if (holidayRes.status === 'fulfilled') {
+      const res = holidayRes.value.data;
+      if (res.code === 0 && res.holiday) {
+        const nextH = res.holiday;
+        const diffDays = Math.ceil((new Date(nextH.date) - new Date()) / (1000 * 60 * 60 * 24));
+        let holidayLine = `最近假期：${nextH.name}`;
+        if (diffDays > 0) holidayLine += `（还有 ${diffDays}天）`;
+        else if (diffDays === 0) holidayLine += `（就在今天！）`;
+        segments.push(holidayLine);
+      }
     }
 
-    // 3. 处理一言
+    // --- 3. 处理热搜 (Uapis API) ---
+    if (hotRes.status === 'fulfilled') {
+      const res = hotRes.value.data;
+      const list = res.list || res.data; // 兼容不同字段名
+      if (Array.isArray(list)) {
+        const hotList = list
+          .slice(0, 5)
+          .map(item => `${item.index || '·'}. ${item.title} 🔥${item.hot_value || ''}`)
+          .join('\n');
+        segments.push(`今日抖音热报：\n${hotList}`);
+      }
+    }
+
+    // --- 4. 处理一言 ---
     let yiyan = "保持热爱，奔赴山海。";
     if (hitoRes.status === 'fulfilled') {
-      yiyan = `${hitoRes.value.data.hitokoto} —— ${hitoRes.value.data.from}`;
+      const h = hitoRes.value.data;
+      if (h && h.hitokoto) {
+        yiyan = `${h.hitokoto} —— ${h.from || '未知'}`;
+      }
     }
     segments.push(`${yiyan}\n接抖音续火花5○-30○/月`);
 
-    return segments.join('\n\n');
+    // --- 最终检查 ---
+    if (segments.length <= 1) { 
+      // 如果只剩下一言（segments长度为1），说明前面的天气热搜都没加进去
+      log('error', 'API 数据解析失败，返回保底文案');
+      return "今日深圳：多云转晴，24℃\n\n保持热爱，奔赴山海。";
+    }
+
+    const finalResult = segments.join('\n\n');
+    log('info', '文案生成成功！预览如下：\n' + finalResult);
+    return finalResult;
+
   } catch (e) {
+    log('error', 'getHitokoto 运行崩溃: ' + e.message);
     return '保持热爱，奔赴山海。';
   }
 }
-
 /**
  * 模拟真实按键输入（解决换行符 \n 失效问题）
  */
