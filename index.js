@@ -106,7 +106,7 @@ async function getHitokoto() {
     // 最终文案（已去掉标题）
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
-    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
+    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n\n接抖音续火花5米-30米/月 有需直接发信息即可`;
 
     return msg;
   } catch (e) {
