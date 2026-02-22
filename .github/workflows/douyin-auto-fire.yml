@@ -2,7 +2,7 @@ name: 抖音续火花自动任务
 
 on:
   schedule:
-    - cron: '10 16 * * *'
+    - cron: '00 16 * * *'
   workflow_dispatch:
 
 jobs:
@@ -38,3 +38,4 @@ jobs:
           path: "*.png" # index.js 报错时生成的截图
 
           retention-days: 3
+
