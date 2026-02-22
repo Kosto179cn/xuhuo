@@ -19,7 +19,6 @@ const CONFIG = {
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
 
-
 async function getHitokoto() {
   try {
     // 1. 获取一言
@@ -39,9 +38,12 @@ async function getHitokoto() {
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
-    const now = new Date();
 
-    // 天数 → 月+天
+    // ✅ 强制获取【北京时间】
+    const now = new Date();
+    const nowBeijing = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+
+    // 天数转月天
     function toMonthDay(days) {
       if (days < 0) return '已结束';
       if (days === 0) return '今天';
@@ -52,7 +54,7 @@ async function getHitokoto() {
       return `${m}个月${d}天`;
     }
 
-    // 只保留合法假期
+    // 过滤调休上班
     const nextList = (holidayData.nearby?.next || []).filter(item => {
       const e = item.events[0];
       return e.type !== 'legal_workday_adjust';
@@ -69,19 +71,20 @@ async function getHitokoto() {
     for (const name in holidayMap) {
       const targetDateStr = holidayMap[name];
       const target = new Date(targetDateStr);
-      const diffMs = target - now;
+      const diffMs = target - nowBeijing;
       const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        // 所有正在过的节日：统一算到【结束日次日 00:00】
+        // ✅ 按【北京时间次日0点】算结束
         const endTime = new Date(
           target.getFullYear(),
           target.getMonth(),
           target.getDate() + 1,
           0, 0, 0
         );
+        const endBeijing = new Date(endTime.getTime() + (8 * 60 * 60 * 1000));
 
-        const ms = endTime - now;
+        const ms = endBeijing - nowBeijing;
         const d = Math.floor(ms / (1000 * 60 * 60 * 24));
         const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
@@ -100,10 +103,9 @@ async function getHitokoto() {
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
 
-    // 最终文案
+    // 最终文案（只保留一次标题）
     let msg = `—————每日续火—————\n\n今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
-
     msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
 
     return msg;
