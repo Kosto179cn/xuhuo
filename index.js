@@ -5,11 +5,13 @@ const path = require('path');
 
 // === 配置区 ===
 const CONFIG = {
+  // 抖音创作者后台私信页面URL
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
+  // 读取目标用户
   targetUsers: fs.existsSync(path.join(__dirname, 'users.txt'))
     ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
-    : '用户1\n用户2', 
-  // 标题统一定义在这里，[API] 会被替换成 getHitokoto 的结果
+    : '用户1\n用户2\n用户3',
+  // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
   messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
   gotoTimeout: 60000
 };
@@ -17,33 +19,33 @@ const CONFIG = {
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
 /**
- * 获取 API 内容 (维持你原本的接口逻辑)
+ * 核心：获取天气、假期、热搜、一言
+ * 函数内部不带标题，保证不重复
  */
 async function getHitokoto() {
   try {
     const fetchOpt = { timeout: 5000 };
-    
-    // 并发请求你指定的接口
-    const [hito, weather, holiday, hot] = await Promise.allSettled([
+    const [hitoRes, weatherRes, holidayRes, hotRes] = await Promise.allSettled([
       axios.get('https://v1.hitokoto.cn/', fetchOpt),
       axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh', fetchOpt),
       axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=5', fetchOpt)
+      axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10', fetchOpt)
     ]);
 
     let segments = [];
 
     // 1. 处理天气和日历
-    if (weather.status === 'fulfilled' && weather.value.data) {
-      const w = weather.value.data;
-      const hData = holiday.status === 'fulfilled' ? holiday.value.data : {};
-      const dayInfo = (hData.days && hData.days[0]) || {};
+    if (weatherRes.status === 'fulfilled' && weatherRes.value.data.code === 200) {
+      const w = weatherRes.value.data;
+      const hData = holidayRes.status === 'fulfilled' ? holidayRes.value.data : { days: [{}] };
+      const dayInfo = hData.days[0] || {};
       
-      const dateStr = dayInfo.weekday_cn ? `，${dayInfo.weekday_cn}，农历${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}` : "";
-      segments.push(`今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}${dateStr}`);
+      const weatherLine = `今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}，${dayInfo.weekday_cn || ''}，农历${dayInfo.lunar_month_name || ''}${dayInfo.lunar_day_name || ''}`;
+      segments.push(weatherLine);
 
-      // 假期逻辑
+      // 处理假期倒计时
       if (hData.nearby?.next) {
+        const nowBeijing = new Date();
         const nextList = hData.nearby.next.filter(item => item.events[0].type === 'legal_rest');
         const groups = {};
         nextList.forEach(item => {
@@ -52,22 +54,30 @@ async function getHitokoto() {
           groups[name].push(item.date);
         });
 
-        const nowBJ = new Date(new Date().getTime() + 8 * 3600000);
         let holidayLines = [];
         for (const name in groups) {
           const days = groups[name];
-          const firstDay = days[0];
-          const lastDay = days[days.length - 1];
-          const endDateBJ = new Date(new Date(lastDay).getTime() + 8 * 3600000);
-          endDateBJ.setHours(23, 59, 59, 999);
-          const ms = endDateBJ - nowBJ;
-          
+          const firstDay = new Date(days[0]);
+          const lastDay = new Date(days[days.length - 1]);
+
           if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-            const h = Math.floor((ms % 86400000) / 3600000);
-            holidayLines.push(`${name}（假期还剩 ${Math.floor(ms/86400000)}天${h}小时）`);
+            // 正在放假
+            const endDate = new Date(lastDay);
+            endDate.setHours(23, 59, 59);
+            const ms = endDate - nowBeijing;
+            const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+            const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            holidayLines.push(`${name}（假期还剩 ${d}天${h}小时）`);
           } else {
-            const totalDays = Math.ceil((new Date(new Date(firstDay).getTime() + 8 * 3600000) - nowBJ) / 86400000);
-            if (totalDays >= 0) holidayLines.push(`${name}（还有 ${totalDays}天）`);
+            // 等待假期
+            const diffMs = firstDay.getTime() - nowBeijing.getTime();
+            const totalDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+            if (totalDays >= 0) {
+              const m = Math.floor(totalDays / 30);
+              const d = totalDays % 30;
+              const timeStr = m === 0 ? `${d}天` : (d === 0 ? `${m}个月` : `${m}个月${d}天`);
+              holidayLines.push(`${name}（还有 ${timeStr}）`);
+            }
           }
         }
         if (holidayLines.length) segments.push(`最近假期：\n${holidayLines.join('\n')}`);
@@ -75,37 +85,39 @@ async function getHitokoto() {
     }
 
     // 2. 处理热搜
-    if (hot.status === 'fulfilled' && hot.value.data.list) {
-      const hots = hot.value.data.list.slice(0, 5).map(item => `${item.index}. ${item.title}`);
-      segments.push(`今日抖音热报：\n${hots.join('\n')}`);
+    if (hotRes.status === 'fulfilled' && hotRes.value.data.list) {
+      const hotList = hotRes.value.data.list
+        .slice(0, 5)
+        .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
+        .join('\n');
+      segments.push(`由我为您推荐今日抖音热搜 TOP5：\n${hotList}`);
     }
 
     // 3. 处理一言
-    const yiyanStr = (hito.status === 'fulfilled' && hito.value.data) 
-      ? `${hito.value.data.hitokoto} —— ${hito.value.data.from}`
-      : "保持热爱，奔赴山海。";
-    
-    segments.push(yiyanStr + "\n接抖音续火花5○-30○/月");
+    let yiyan = "保持热爱，奔赴山海。";
+    if (hitoRes.status === 'fulfilled') {
+      yiyan = `${hitoRes.value.data.hitokoto} —— ${hitoRes.value.data.from}`;
+    }
+    segments.push(`${yiyan}\n接抖音续火花5○-30○/月`);
 
     return segments.join('\n\n');
-
   } catch (e) {
-    return `保持热爱，奔赴山海。`;
+    return '保持热爱，奔赴山海。';
   }
 }
 
 /**
- * 核心修复：模拟键盘输入，解决 \n 失效
+ * 模拟真实按键输入（解决换行符 \n 失效问题）
  */
 async function typeRealMessage(page, selector, text) {
   await page.focus(selector);
-  // 清空原有内容
+  // 先清空输入框
   await page.keyboard.down('Control');
   await page.keyboard.press('a');
   await page.keyboard.up('Control');
   await page.keyboard.press('Backspace');
 
-  // 逐字输入并处理换行
+  // 逐字输入，遇到换行按 Shift+Enter
   for (const char of text) {
     if (char === '\n') {
       await page.keyboard.down('Shift');
@@ -116,7 +128,7 @@ async function typeRealMessage(page, selector, text) {
     }
   }
   await page.waitForTimeout(500);
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 发送
 }
 
 function fixCookies(rawCookies) {
@@ -130,13 +142,15 @@ function fixCookies(rawCookies) {
     } else {
       delete cookie.sameSite;
     }
-    delete cookie.storeId; delete cookie.hostOnly; delete cookie.session;
+    delete cookie.storeId;
+    delete cookie.hostOnly;
+    delete cookie.session;
     return cookie;
   });
 }
 
 async function scrollAndFindUser(page, username) {
-  log('info', `🔍 寻找用户: ${username}`);
+  log('info', `🔍 正在寻找用户: ${username}`);
   for (let i = 0; i < 30; i++) {
     const found = await page.evaluate((name) => {
       const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
@@ -154,7 +168,7 @@ async function scrollAndFindUser(page, username) {
       if (grid) grid.scrollTop += 600;
       else window.scrollBy(0, 600);
     });
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
   }
   return false;
 }
@@ -179,7 +193,7 @@ async function main() {
   try {
     await context.addCookies(cleanCookies);
     const page = await context.newPage();
-    log('info', '🚀 正在进入页面...');
+    log('info', '🚀 正在进入抖音页面...');
     await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded', timeout: CONFIG.gotoTimeout });
     await page.waitForTimeout(10000);
 
@@ -188,18 +202,19 @@ async function main() {
       return;
     }
 
-    // 1. 先生成好最终文案 (去重、换行已处理)
+    // 💡 关键优化：只获取一次内容，所有人通用
     const apiContent = await getHitokoto();
     const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
 
     const failedUsers = [];
     const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
 
-    // 2. 遍历发送
+    // 第一次发送
     for (const user of users) {
       try {
         const found = await scrollAndFindUser(page, user);
         if (!found) {
+          log('warn', `⚠️ 找不到用户: ${user}`);
           failedUsers.push(user);
           continue;
         }
@@ -211,22 +226,24 @@ async function main() {
         log('success', `✨ 已发给: ${user}`);
         await page.waitForTimeout(3000);
       } catch (e) {
-        log('error', `❌ ${user} 异常`);
+        log('error', `❌ ${user} 发送异常`);
         failedUsers.push(user);
       }
     }
 
-    // 3. 重试逻辑 (重试时同样使用键盘模拟输入)
+    // 重试逻辑
     if (failedUsers.length > 0) {
-      log('info', `🔁 正在重试 ${failedUsers.length} 个用户`);
+      log('info', `🔁 开始重试失败用户: ${failedUsers.length} 个`);
       for (const user of failedUsers) {
-        for (let i = 1; i <= 2; i++) {
+        for (let i = 1; i <= 3; i++) {
           try {
-            if (await scrollAndFindUser(page, user)) {
+            log('info', `重试 ${user} (${i}/3)`);
+            const found = await scrollAndFindUser(page, user);
+            if (found) {
               await page.waitForSelector(inputSelector, { timeout: 8000 });
               await typeRealMessage(page, inputSelector, finalMsg);
               log('success', `✅ 重试成功: ${user}`);
-              break;
+              break; 
             }
           } catch (e) {
             await page.waitForTimeout(2000);
