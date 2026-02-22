@@ -21,85 +21,88 @@ const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [$
 
 async function getHitokoto() {
   const TITLE = "—————每日续火—————";
-  
+  // 预设一个变量存储最终结果，初始值就是标题
+  let finalMsg = TITLE + "\n\n";
+
   try {
-    // 1. 数据获取（增加超时控制，防止因耗时过长触发平台重试）
-    const fetchOptions = { timeout: 4000 };
+    // 1. 获取数据（全部设置超时，防止卡死导致重复触发）
+    const fetchOpt = { timeout: 3000 };
     
-    // 并发请求提高效率，减少总耗时
-    const [hitokotoRes, weatherRes, holidayRes, hotRes] = await Promise.allSettled([
-      axios.get('https://v1.hitokoto.cn/', fetchOptions),
-      axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh', fetchOptions),
-      axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7', fetchOptions),
-      axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=5', fetchOptions)
+    // 采用 Promise.allSettled 即使其中一个 API 挂了，其他的也能跑
+    const [hito, weather, holiday, hot] = await Promise.allSettled([
+      axios.get('https://v1.hitokoto.cn/', fetchOpt),
+      axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh', fetchOpt),
+      axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7', fetchOpt),
+      axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=5', fetchOpt)
     ]);
 
-    // 2. 提取数据（安全处理）
-    const yiyan = hitokotoRes.status === 'fulfilled' ? `${hitokotoRes.value.data.hitokoto} —— ${hitokotoRes.value.data.from}` : "保持热爱，奔赴山海。";
-    const w = weatherRes.status === 'fulfilled' ? weatherRes.value.data : {};
-    const hData = holidayRes.status === 'fulfilled' ? holidayRes.value.data : {};
-    
-    // 3. 时间计算
-    const nowBeijing = new Date(new Date().getTime() + 8 * 3600000);
-    const dayInfo = (hData.days && hData.days[0]) || {};
-    
-    // 4. 组装内容 (使用数组最后 join，避免中间拼接出错)
-    let content = [];
-    content.push(TITLE);
-    content.push(""); // 空行
-    
-    const weatherStr = w.city ? `今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}` : "天气获取中...";
-    const dateStr = dayInfo.weekday_cn ? `，${dayInfo.weekday_cn}，农历${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}` : "";
-    content.push(weatherStr + dateStr);
+    // 检查核心数据是否获取成功，如果全部失败，手动跳到 catch
+    if (weather.status === 'rejected' && hot.status === 'rejected') {
+      throw new Error("Core API Failed");
+    }
 
-    // 假期倒计时
-    if (hData.nearby?.next) {
-      const holidayLines = [];
-      // ... (此处保留你原有的假期过滤逻辑，为了简洁略作简化)
-      // 假设已处理好放入 holidayLines
-      if (holidayLines.length) {
-        content.push("最近假期：");
-        content.push(...holidayLines);
+    // 2. 处理天气和日历
+    if (weather.status === 'fulfilled' && weather.value.data) {
+      const w = weather.value.data;
+      const hData = holiday.status === 'fulfilled' ? holiday.value.data : {};
+      const dayInfo = (hData.days && hData.days[0]) || {};
+      
+      const dateStr = dayInfo.weekday_cn ? `，${dayInfo.weekday_cn}，农历${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}` : "";
+      finalMsg += `今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}${dateStr}\n`;
+
+      // 假期逻辑
+      if (hData.nearby?.next) {
+        const nextList = hData.nearby.next.filter(item => item.events[0].type === 'legal_rest');
+        const groups = {};
+        nextList.forEach(item => {
+          const name = item.events[0].name;
+          if (!groups[name]) groups[name] = [];
+          groups[name].push(item.date);
+        });
+
+        const nowBJ = new Date(new Date().getTime() + 8 * 3600000);
+        let holidayLines = [];
+        for (const name in groups) {
+          const days = groups[name];
+          const firstDay = days[0];
+          const lastDay = days[days.length - 1];
+
+          const endDateBJ = new Date(new Date(lastDay).getTime() + 8 * 3600000);
+          endDateBJ.setHours(23, 59, 59, 999);
+          const ms = endDateBJ - nowBJ;
+          
+          if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
+            const h = Math.floor((ms % 86400000) / 3600000);
+            holidayLines.push(`${name}（假期还剩 ${Math.floor(ms/86400000)}天${h}小时）`);
+          } else {
+            const totalDays = Math.ceil((new Date(new Date(firstDay).getTime() + 8 * 3600000) - nowBJ) / 86400000);
+            if (totalDays >= 0) holidayLines.push(`${name}（还有 ${totalDays}天）`);
+          }
+        }
+        if (holidayLines.length) finalMsg += `最近假期：\n${holidayLines.join('\n')}\n`;
       }
     }
 
-    // 抖音热搜
-    content.push("\n今日抖音热搜 TOP5：");
-    if (hotRes.status === 'fulfilled' && hotRes.value.data.list) {
-      const hots = hotRes.value.data.list.slice(0, 5).map(item => `${item.index}. ${item.title}`);
-      content.push(...hots);
-    } else {
-      content.push("暂无热搜数据");
+    // 3. 处理热搜
+    if (hot.status === 'fulfilled' && hot.value.data.list) {
+      finalMsg += `\n今日抖音热报：\n`;
+      const hots = hot.value.data.list.slice(0, 5).map(item => `${item.index}. ${item.title}`);
+      finalMsg += hots.join('\n') + "\n";
     }
 
-    content.push(`\n${yiyan}`);
-    content.push("接抖音续火花5○-30○/月");
-
-    // ==========================================
-    // 核心修复：执行完后进行“自我审查”去重
-    // ==========================================
-    let finalMsg = content.join('\n');
+    // 4. 处理一言
+    const yiyanStr = (hito.status === 'fulfilled' && hito.value.data) 
+      ? `\n${hito.value.data.hitokoto} —— ${hito.value.data.from}`
+      : "\n保持热爱，奔赴山海。";
     
-    // 1. 如果文本中出现了多次 TITLE，只保留第一个
-    const firstTitleIndex = finalMsg.indexOf(TITLE);
-    if (firstTitleIndex !== -1) {
-      const afterFirstTitle = finalMsg.substring(firstTitleIndex + TITLE.length);
-      // 使用正则全局替换掉后面所有重复的标题
-      const cleanedBody = afterFirstTitle.split(TITLE).join(""); 
-      finalMsg = TITLE + cleanedBody;
-    }
-
-    // 2. 压缩连续的空行（防止视觉上太乱）
-    finalMsg = finalMsg.replace(/\n\s*\n\s*\n/g, '\n\n');
+    finalMsg += yiyanStr + "\n接抖音续火花5○-30○/月";
 
     return finalMsg.trim();
 
   } catch (e) {
-    // 报错时也返回去重后的简单文案
-    return `${TITLE}\n\n保持热爱，奔赴山海。\n（系统已自动修复重复错误）`;
+    return `保持热爱，奔赴山海`;
   }
 }
-
 
 
 /**
