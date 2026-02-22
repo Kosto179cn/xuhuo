@@ -1,0 +1,38 @@
+name: 📁 批量查询仓库内文件
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'  # 每天 UTC 8点
+
+jobs:
+  batch-query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🛒 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🟩 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: 📦 安装 Puppeteer
+        run: npm install puppeteer
+
+      - name: 🚀 运行批量查询 (读取文件模式)
+        # 运行我们重命名后的脚本
+        run: node file-batch.js
+
+      - name: 📤 提交结果
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if git diff --quiet HEAD -- output.json; then
+            echo "ℹ️ 数据未变化，跳过提交。"
+          else
+            git add output.json
+            git commit -m "🤖 自动更新: 批量查询结果 $(date)"
+            git push origin main
+          fi
