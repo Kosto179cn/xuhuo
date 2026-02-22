@@ -21,11 +21,11 @@ const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [$
 
 async function getHitokoto() {
   try {
-    // 1. 一言
+    // 1. 获取一言
     const { data: hitokotoData } = await axios.get('https://v1.hitokoto.cn/');
     const yiyan = `${hitokotoData.hitokoto} —— ${hitokotoData.from}`;
 
-    // 2. 天气（深圳）
+    // 2. 获取天气
     const { data: weatherData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
     const city = weatherData.city;
     const weather = weatherData.weather;
@@ -33,17 +33,17 @@ async function getHitokoto() {
     const wind = weatherData.wind_direction;
     const windPower = weatherData.wind_power;
 
-    // 3. 日历（强制北京时间）
+    // 3. 获取日历
     const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7');
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
 
-    // 🔴 核心：只认北京时间，不依赖设备时区
+    // 取 北京时间
     const now = new Date();
-    const nowBeijing = new Date(now.getTime() + 8 * 3600 * 1000);
+    const nowBeijing = new Date(now.getTime() + 8 * 60 * 60 * 1000);
 
-    // 天数转“月+天”
+    // 天数转 月+天
     function toMonthDay(days) {
       if (days < 0) return '已结束';
       if (days === 0) return '今天';
@@ -54,30 +54,40 @@ async function getHitokoto() {
       return `${m}个月${d}天`;
     }
 
-    // 过滤调休、合并同名节日
+    // 只保留合法假期，排除调休上班
     const nextList = (holidayData.nearby?.next || []).filter(item => {
       const e = item.events[0];
-      return e.type !== 'legal_workday_adjust';
+      return e.type === 'legal_rest';
     });
-    const holidayMap = {};
+
+    // 按节日名称分组，拿到每组最后一天
+    const groups = {};
     nextList.forEach(item => {
       const name = item.events[0].name;
-      if (!holidayMap[name]) holidayMap[name] = item.date;
+      if (!groups[name]) groups[name] = [];
+      groups[name].push(item.date);
     });
 
     const lines = [];
-    for (const name in holidayMap) {
-      const targetDateStr = holidayMap[name];
-      const target = new Date(targetDateStr);
-      const diffMs = target - nowBeijing;
-      const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    for (const name in groups) {
+      const days = groups[name];
+      const lastDay = days[days.length - 1]; // 该节日最后一天
+      const firstDay = days[0];
+
+      // 计算到【最后一天的 24:00 / 次日00:00】
+      const lastDate = new Date(lastDay);
+      const endDate = new Date(lastDate);
+      endDate.setDate(endDate.getDate() + 1); // +1天 = 次日0点
+      const endBeijing = new Date(endDate.getTime() + 8 * 60 * 60 * 1000);
+
+      const ms = endBeijing - nowBeijing;
+      const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+      const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+      const firstDate = new Date(firstDay);
+      const totalDays = Math.floor((firstDate - nowBeijing) / (1000 * 60 * 60 * 24));
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        // ✅ 春节结束：2月24日 00:00（北京时间）
-        const endBeijing = new Date(2026, 1, 24, 0, 0, 0); // 月份从0开始
-        const ms = endBeijing - nowBeijing;
-        const d = Math.floor(ms / (1000 * 60 * 60 * 24));
-        const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
         lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
       } else {
         lines.push(`${name}（还有 ${toMonthDay(totalDays)}）`);
@@ -93,7 +103,7 @@ async function getHitokoto() {
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
 
-    // 最终文案（只保留一次标题）
+    // 最终文案（只一次标题）
     let msg = `—————每日续火—————\n\n今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
     msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
