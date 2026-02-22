@@ -30,26 +30,42 @@ async function getHitokoto() {
     const city = weatherData.city;
     const weather = weatherData.weather;
     const temp = weatherData.temperature;
-    const wind = weatherData.wind_direction;
+    const wind = weather.wind_direction;
     const windPower = weatherData.wind_power;
 
-    // 3. 获取节日/日历
-    const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar');
+    // 3. 获取日历（新版接口）
+    const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7');
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
-    const festivalName = dayInfo.legal_holiday_name || '';
 
-    // 4. 抖音热搜 TOP5（无链接，最适合抖音文案）
+    let festivalText = '';
+
+    // 统一：不管今天是不是假期，都取下一个节日
+    const nextHoliday = holidayData.nearby?.next?.[0];
+    if (nextHoliday) {
+      const nextDateStr = nextHoliday.date;
+      const event = nextHoliday.events[0];
+      const holidayName = event.name;
+
+      // 原生 JS 计算相差天数，不用任何库
+      const today = new Date();
+      const target = new Date(nextDateStr);
+      const diffDays = Math.floor((target - today) / (1000 * 60 * 60 * 24));
+
+      festivalText = `\n下一个节日：${holidayName}（还有 ${diffDays} 天）`;
+    }
+
+    // 4. 抖音热搜 TOP5
     const { data: hotData } = await axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10');
-    
     const hotList = hotData.list
       .slice(0, 5)
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
 
+    // 拼接文案
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
-    if (festivalName) msg += `\n今日节日：${festivalName}`;
+    msg += festivalText;
 
     msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
 
@@ -58,7 +74,6 @@ async function getHitokoto() {
     return '保持热爱，奔赴山海。';
   }
 }
-
 
 /**
  * 核心修复函数：清洗 Cookie 格式，解决 sameSite 报错
