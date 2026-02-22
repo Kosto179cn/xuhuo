@@ -39,11 +39,20 @@ async function getHitokoto() {
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
 
-    // 取 北京时间
+    // ==========================================
+    // 核心修复：处理服务器时区（假设服务器是 UTC 或美国时间）
+    // JavaScript 中 new Date() 获取的是服务器本地时间。
+    // 北京时间 = UTC时间 + 8小时
+    // 如果服务器是美国西海岸（UTC-8），那么服务器时间比北京时间慢16小时，需要加16小时。
+    // 为了通用，我们直接获取时间戳并强制加上 8小时（28800000毫秒）的偏移来得到北京时间。
+    // ==========================================
     const now = new Date();
-    const nowBeijing = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    // 转换为 北京时间的时间戳 (毫秒)
+    // 注意：这里 + 8小时 是因为 UTC+8。如果你的服务器已经是 UTC，加 8 小时即可。
+    const nowTimestamp = now.getTime() + (8 * 60 * 60 * 1000); 
+    const nowBeijing = new Date(nowTimestamp);
 
-    // 天数转 月+天
+    // 天数转 月+天 (辅助函数)
     function toMonthDay(days) {
       if (days < 0) return '已结束';
       if (days === 0) return '今天';
@@ -60,7 +69,7 @@ async function getHitokoto() {
       return e.type === 'legal_rest';
     });
 
-    // 按节日名称分组，拿到每组最后一天
+    // 按节日名称分组
     const groups = {};
     nextList.forEach(item => {
       const name = item.events[0].name;
@@ -74,21 +83,32 @@ async function getHitokoto() {
       const lastDay = days[days.length - 1]; // 该节日最后一天
       const firstDay = days[0];
 
-      // 计算到【最后一天的 24:00 / 次日00:00】
-      const lastDate = new Date(lastDay);
-      const endDate = new Date(lastDate);
-      endDate.setDate(endDate.getDate() + 1); // +1天 = 次日0点
-      const endBeijing = new Date(endDate.getTime() + 8 * 60 * 60 * 1000);
+      // --- 计算假期结束时间 (北京时间) ---
+      // lastDay 是字符串，如 "2024-02-17"
+      const endDate = new Date(lastDay);
+      // 1. 先给 endDate 加上 8小时偏移，使其变为北京时间
+      const endDateBeijing = new Date(endDate.getTime() + (8 * 60 * 60 * 1000));
+      // 2. 设置为当天的最后一秒 (23:59:59)
+      endDateBeijing.setHours(23, 59, 59, 999);
 
-      const ms = endBeijing - nowBeijing;
+      // --- 计算时间差 ---
+      const ms = endDateBeijing - nowBeijing; // 现在都是北京时间，计算准确
       const d = Math.floor(ms / (1000 * 60 * 60 * 24));
       const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
+      // --- 计算距离放假开始还有几天 (用于非假期期间显示) ---
       const firstDate = new Date(firstDay);
-      const totalDays = Math.floor((firstDate - nowBeijing) / (1000 * 60 * 60 * 24));
+      const firstDateBeijing = new Date(firstDate.getTime() + (8 * 60 * 60 * 1000));
+      const totalMs = firstDateBeijing - nowBeijing;
+      const totalDays = Math.ceil(totalMs / (1000 * 60 * 60 * 24)); // 向上取整
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
+        // 修正：如果天数为0，只显示小时
+        if (d <= 0) {
+          lines.push(`${name}（假期还剩 ${h}小时）`);
+        } else {
+          lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
+        }
       } else {
         lines.push(`${name}（还有 ${toMonthDay(totalDays)}）`);
       }
@@ -103,14 +123,25 @@ async function getHitokoto() {
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
 
-    // 最终文案（只一次标题）
-    let msg = `—————每日续火—————\n\n今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    // 最终文案（确保标题只出现一次）
+    let msg = `—————每日续火—————
+    
+今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    
     msg += festivalText;
-    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
+    
+    msg += `
+    
+由我为您推荐今日抖音热搜 TOP5：
+${hotList}
+
+${yiyan}
+接抖音续火花5○-30○/月`;
 
     return msg;
   } catch (e) {
-    return '保持热爱，奔赴山海。';
+    // 如果出错，返回简单文本
+    return '—————每日续火—————\n保持热爱，奔赴山海。';
   }
 }
 
