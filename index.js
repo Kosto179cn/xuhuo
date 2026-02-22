@@ -12,7 +12,7 @@ const CONFIG = {
     ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
     : '用户1\n用户2\n用户3',
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
-  messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————',
+  messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
   gotoTimeout: 60000
 };
 
@@ -114,8 +114,7 @@ async function getHitokoto() {
       .join('\n');
 
     // 最终文案（去掉了标题“每日续火”）
-    let msg = `    
-今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     
     msg += festivalText;
     
