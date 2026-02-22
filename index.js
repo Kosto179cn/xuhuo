@@ -19,42 +19,67 @@ const CONFIG = {
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
 
+
 async function getHitokoto() {
   try {
     // 1. 获取一言
     const { data: hitokotoData } = await axios.get('https://v1.hitokoto.cn/');
     const yiyan = `${hitokotoData.hitokoto} —— ${hitokotoData.from}`;
 
-    // 2. 获取天气（深圳，可自己改城市）
+    // 2. 获取天气
     const { data: weatherData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
     const city = weatherData.city;
     const weather = weatherData.weather;
     const temp = weatherData.temperature;
-    const wind = weather.wind_direction;
+    const wind = weatherData.wind_direction;
     const windPower = weatherData.wind_power;
 
-    // 3. 获取日历（新版接口）
+    // 3. 获取日历
     const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7');
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
+    const today = new Date();
 
-    let festivalText = '';
-
-    // 统一：不管今天是不是假期，都取下一个节日
-    const nextHoliday = holidayData.nearby?.next?.[0];
-    if (nextHoliday) {
-      const nextDateStr = nextHoliday.date;
-      const event = nextHoliday.events[0];
-      const holidayName = event.name;
-
-      // 原生 JS 计算相差天数，不用任何库
-      const today = new Date();
-      const target = new Date(nextDateStr);
-      const diffDays = Math.floor((target - today) / (1000 * 60 * 60 * 24));
-
-      festivalText = `\n下一个节日：${holidayName}（还有 ${diffDays} 天）`;
+    // 天数转 月+天
+    function toMonthDay(days) {
+      if (days < 0) return '已结束';
+      if (days === 0) return '今天';
+      const m = Math.floor(days / 30);
+      const d = days % 30;
+      if (m === 0) return `${d}天`;
+      if (d === 0) return `${m}个月`;
+      return `${m}个月${d}天`;
     }
+
+    // 只保留合法假期，去掉调休上班
+    const nextList = (holidayData.nearby?.next || []).filter(item => {
+      const e = item.events[0];
+      return e.type !== 'legal_workday_adjust';
+    });
+
+    // 合并同名节日
+    const holidayMap = {};
+    nextList.forEach(item => {
+      const name = item.events[0].name;
+      if (!holidayMap[name]) holidayMap[name] = item.date;
+    });
+
+    const lines = [];
+    for (const name in holidayMap) {
+      const targetDate = new Date(holidayMap[name]);
+      const diff = Math.floor((targetDate - today) / (1000 * 60 * 60 * 24));
+
+      if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
+        // 今天正在过这个节 → 显示剩余天数
+        lines.push(`${name}（假期还剩 ${diff} 天）`);
+      } else {
+        // 还没到 → 显示还有多久
+        lines.push(`${name}（还有 ${toMonthDay(diff)}）`);
+      }
+    }
+
+    const festivalText = lines.length ? '\n最近假期：\n' + lines.join('\n') : '';
 
     // 4. 抖音热搜 TOP5
     const { data: hotData } = await axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10');
@@ -63,7 +88,7 @@ async function getHitokoto() {
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
 
-    // 拼接文案
+    // 最终文案
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
 
@@ -74,6 +99,10 @@ async function getHitokoto() {
     return '保持热爱，奔赴山海。';
   }
 }
+
+
+
+
 
 /**
  * 核心修复函数：清洗 Cookie 格式，解决 sameSite 报错
