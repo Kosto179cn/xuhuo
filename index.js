@@ -124,7 +124,7 @@ async function getHitokoto() {
 ${hotList}
 
 ${yiyan}
-\n接自动抖音续火花5○-30○/月 有需要可直接在此处聊天发信息`;
+\n接自动抖音续火花5米-30米/月 有需要可直接在此处聊天发信息`;
 
     return msg;
   } catch (e) {
