@@ -40,26 +40,24 @@ async function getHitokoto() {
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
     const festivalName = dayInfo.legal_holiday_name || '';
 
-    // 4. 获取抖音热搜：TOP5 + 热度 + 原链接 + 每条后换行
+    // 4. 抖音热搜 TOP5（无链接，最适合抖音文案）
     const { data: hotData } = await axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10');
     
     const hotList = hotData.list
       .slice(0, 5)
-      .map(item => `${item.index}. ${item.title} 🔥${item.hot_value} 🔗${item.url}\n`)
-      .join('');
+      .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
+      .join('\n');
 
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
-    if (festivalName) msg += `，今日节日：${festivalName}`;
+    if (festivalName) msg += `\n今日节日：${festivalName}`;
 
-    msg += `\n\n抖音热搜 TOP5：\n${hotList}\n\n${yiyan}`;
+    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
 
     return msg;
   } catch (e) {
     return '保持热爱，奔赴山海。';
   }
 }
-
-
 
 
 /**
