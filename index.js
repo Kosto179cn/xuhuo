@@ -39,9 +39,9 @@ async function getHitokoto() {
     const dayInfo = holidayData.days[0];
     const weekday = dayInfo.weekday_cn;
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
-    const today = new Date();
+    const now = new Date();
 
-    // 天数转 月+天
+    // 天数 → 月+天
     function toMonthDay(days) {
       if (days < 0) return '已结束';
       if (days === 0) return '今天';
@@ -52,7 +52,7 @@ async function getHitokoto() {
       return `${m}个月${d}天`;
     }
 
-    // 只保留合法假期，去掉调休上班
+    // 只保留合法假期
     const nextList = (holidayData.nearby?.next || []).filter(item => {
       const e = item.events[0];
       return e.type !== 'legal_workday_adjust';
@@ -67,15 +67,27 @@ async function getHitokoto() {
 
     const lines = [];
     for (const name in holidayMap) {
-      const targetDate = new Date(holidayMap[name]);
-      const diff = Math.floor((targetDate - today) / (1000 * 60 * 60 * 24));
+      const targetDateStr = holidayMap[name];
+      const target = new Date(targetDateStr);
+      const diffMs = target - now;
+      const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        // 今天正在过这个节 → 显示剩余天数
-        lines.push(`${name}（假期还剩 ${diff} 天）`);
+        // 所有正在过的节日：统一算到【结束日次日 00:00】
+        const endTime = new Date(
+          target.getFullYear(),
+          target.getMonth(),
+          target.getDate() + 1,
+          0, 0, 0
+        );
+
+        const ms = endTime - now;
+        const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+        const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+        lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
       } else {
-        // 还没到 → 显示还有多久
-        lines.push(`${name}（还有 ${toMonthDay(diff)}）`);
+        lines.push(`${name}（还有 ${toMonthDay(totalDays)}）`);
       }
     }
 
@@ -89,7 +101,7 @@ async function getHitokoto() {
       .join('\n');
 
     // 最终文案
-    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    let msg = `—————每日续火—————\n\n今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     msg += festivalText;
 
     msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
