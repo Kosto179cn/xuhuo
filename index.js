@@ -201,6 +201,7 @@ async function scrollAndFindUser(page, username) {
 }
 
 async function main() {
+  // 1. 初始化
   const users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
   let rawCookies;
   try {
@@ -229,60 +230,89 @@ async function main() {
       return;
     }
 
-    // 💡 关键优化：只获取一次内容，所有人通用
+    // 💡 获取一次通用内容
     const apiContent = await getHitokoto();
     const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
-
-    const failedUsers = [];
     const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
 
-    // 第一次发送
-    for (const user of users) {
-      try {
-        const found = await scrollAndFindUser(page, user);
-        if (!found) {
-          log('warn', `⚠️ 找不到用户: ${user}`);
-          failedUsers.push(user);
-          continue;
+    // 2. 核心逻辑：逐个处理用户
+    // 使用 filter 模拟 "待办列表"，当列表为空时结束
+    let pendingUsers = [...users]; // 创建副本，避免修改原数组
+    let totalSent = 0;
+
+    // 只要还有待发送的用户，就继续循环
+    while (pendingUsers.length > 0) {
+      // 记录本次滚动前的列表长度，用于判断是否有用户被成功发送
+      const beforeLength = pendingUsers.length;
+      
+      // 遍历当前页面可见区域（模拟滚动查找）
+      for (let i = 0; i < 30; i++) {
+        // 检查是否还有用户需要发送
+        if (pendingUsers.length === 0) break;
+
+        // 在当前页面视图中尝试查找并发送给待办列表中的用户
+        const result = await page.evaluate((usernames) => {
+          const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
+          // 遍历页面上的所有用户名元素
+          for (const el of spans) {
+            const text = el.textContent.trim();
+            // 如果这个元素是待办列表中的用户
+            if (usernames.includes(text)) {
+              el.scrollIntoView();
+              el.click(); // 点击进入聊天
+              return { found: true, username: text }; // 返回找到的用户名
+            }
+          }
+          return { found: false, username: null };
+        }, pendingUsers);
+
+        if (result.found) {
+          const user = result.username;
+          try {
+            await page.waitForTimeout(2000);
+            await page.waitForSelector(inputSelector, { timeout: 8000 });
+            
+            await typeRealMessage(page, inputSelector, finalMsg);
+            
+            log('success', `✨ 已发给: ${user} (标记为已完成)`);
+            totalSent++;
+
+            // ⭐ 关键步骤：从待办列表中移除该用户 (标记完成)
+            pendingUsers = pendingUsers.filter(u => u !== user);
+            
+            await page.waitForTimeout(3000); // 发送间隔
+          } catch (e) {
+            log('error', `❌ ${user} 发送失败，将在下一轮重试`);
+            // 如果发送失败，不从列表中移除，下一轮继续尝试
+            await page.waitForTimeout(2000);
+          }
+        } else {
+          // 如果当前这一轮滚动没有找到任何待办用户，向下滚动继续找
+          await page.evaluate(() => {
+            const grid = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+            if (grid) grid.scrollTop += 600;
+            else window.scrollBy(0, 600);
+          });
+          await page.waitForTimeout(1500);
         }
-        await page.waitForTimeout(2000);
-        await page.waitForSelector(inputSelector, { timeout: 8000 });
-        
-        await typeRealMessage(page, inputSelector, finalMsg);
-        
-        log('success', `✨ 已发给: ${user}`);
-        await page.waitForTimeout(3000);
-      } catch (e) {
-        log('error', `❌ ${user} 发送异常`);
-        failedUsers.push(user);
+      }
+
+      // 3. 完成判断
+      // 如果经过一轮完整的滚动查找（30次），待办列表长度没有变化
+      // 说明剩下的用户可能不存在，或者网络卡顿，为了避免死循环，强制退出
+      const afterLength = pendingUsers.length;
+      if (afterLength === beforeLength) {
+        log('warn', `⚠️ 经过一轮查找未发现新用户，剩余 ${afterLength} 人可能无法送达:`, pendingUsers.join(', '));
+        break;
       }
     }
 
-    // 重试逻辑
-    if (failedUsers.length > 0) {
-      log('info', `🔁 开始重试失败用户: ${failedUsers.length} 个`);
-      for (const user of failedUsers) {
-        for (let i = 1; i <= 3; i++) {
-          try {
-            log('info', `重试 ${user} (${i}/3)`);
-            const found = await scrollAndFindUser(page, user);
-            if (found) {
-              await page.waitForSelector(inputSelector, { timeout: 8000 });
-              await typeRealMessage(page, inputSelector, finalMsg);
-              log('success', `✅ 重试成功: ${user}`);
-              break; 
-            }
-          } catch (e) {
-            await page.waitForTimeout(2000);
-          }
-        }
-      }
-    }
+    log('info', `🏁 任务结束，成功发送 ${totalSent}/${users.length} 人`);
+
   } catch (e) {
     log('error', `致命错误: ${e.message}`);
   } finally {
     await browser.close();
-    log('info', '🏁 任务结束');
   }
 }
 
