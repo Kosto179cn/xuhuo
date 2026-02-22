@@ -20,87 +20,97 @@ const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [$
 
 
 async function getHitokoto() {
-  const TITLE = "—————每日续火—————";
-  // 预设一个变量存储最终结果，初始值就是标题
-  let finalMsg = TITLE + "\n\n";
-
   try {
-    // 1. 获取数据（全部设置超时，防止卡死导致重复触发）
-    const fetchOpt = { timeout: 3000 };
-    
-    // 采用 Promise.allSettled 即使其中一个 API 挂了，其他的也能跑
-    const [hito, weather, holiday, hot] = await Promise.allSettled([
-      axios.get('https://v1.hitokoto.cn/', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7', fetchOpt),
-      axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=5', fetchOpt)
-    ]);
+    // 1. 获取一言
+    const { data: hitokotoData } = await axios.get('https://v1.hitokoto.cn/');
+    const yiyan = `${hitokotoData.hitokoto} —— ${hitokotoData.from}`;
 
-    // 检查核心数据是否获取成功，如果全部失败，手动跳到 catch
-    if (weather.status === 'rejected' && hot.status === 'rejected') {
-      throw new Error("Core API Failed");
+    // 2. 获取天气
+    const { data: weatherData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
+    const city = weatherData.city;
+    const weather = weatherData.weather;
+    const temp = weatherData.temperature;
+    const wind = weatherData.wind_direction;
+    const windPower = weatherData.wind_power;
+
+    // 3. 获取日历
+    const { data: holidayData } = await axios.get('https://uapis.cn/api/v1/misc/holiday-calendar?timezone=Asia%2FShanghai&holiday_type=legal&include_nearby=true&nearby_limit=7');
+    const dayInfo = holidayData.days[0];
+    const weekday = dayInfo.weekday_cn;
+    const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
+
+    // 取 北京时间
+    const now = new Date();
+    const nowBeijing = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+    // 天数转 月+天
+    function toMonthDay(days) {
+      if (days < 0) return '已结束';
+      if (days === 0) return '今天';
+      const m = Math.floor(days / 30);
+      const d = days % 30;
+      if (m === 0) return `${d}天`;
+      if (d === 0) return `${m}个月`;
+      return `${m}个月${d}天`;
     }
 
-    // 2. 处理天气和日历
-    if (weather.status === 'fulfilled' && weather.value.data) {
-      const w = weather.value.data;
-      const hData = holiday.status === 'fulfilled' ? holiday.value.data : {};
-      const dayInfo = (hData.days && hData.days[0]) || {};
-      
-      const dateStr = dayInfo.weekday_cn ? `，${dayInfo.weekday_cn}，农历${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}` : "";
-      finalMsg += `今日${w.city}：${w.weather}，气温${w.temperature}℃，${w.wind_direction}${w.wind_power}${dateStr}\n`;
+    // 只保留合法假期，排除调休上班
+    const nextList = (holidayData.nearby?.next || []).filter(item => {
+      const e = item.events[0];
+      return e.type === 'legal_rest';
+    });
 
-      // 假期逻辑
-      if (hData.nearby?.next) {
-        const nextList = hData.nearby.next.filter(item => item.events[0].type === 'legal_rest');
-        const groups = {};
-        nextList.forEach(item => {
-          const name = item.events[0].name;
-          if (!groups[name]) groups[name] = [];
-          groups[name].push(item.date);
-        });
+    // 按节日名称分组，拿到每组最后一天
+    const groups = {};
+    nextList.forEach(item => {
+      const name = item.events[0].name;
+      if (!groups[name]) groups[name] = [];
+      groups[name].push(item.date);
+    });
 
-        const nowBJ = new Date(new Date().getTime() + 8 * 3600000);
-        let holidayLines = [];
-        for (const name in groups) {
-          const days = groups[name];
-          const firstDay = days[0];
-          const lastDay = days[days.length - 1];
+    const lines = [];
+    for (const name in groups) {
+      const days = groups[name];
+      const lastDay = days[days.length - 1]; // 该节日最后一天
+      const firstDay = days[0];
 
-          const endDateBJ = new Date(new Date(lastDay).getTime() + 8 * 3600000);
-          endDateBJ.setHours(23, 59, 59, 999);
-          const ms = endDateBJ - nowBJ;
-          
-          if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-            const h = Math.floor((ms % 86400000) / 3600000);
-            holidayLines.push(`${name}（假期还剩 ${Math.floor(ms/86400000)}天${h}小时）`);
-          } else {
-            const totalDays = Math.ceil((new Date(new Date(firstDay).getTime() + 8 * 3600000) - nowBJ) / 86400000);
-            if (totalDays >= 0) holidayLines.push(`${name}（还有 ${totalDays}天）`);
-          }
-        }
-        if (holidayLines.length) finalMsg += `最近假期：\n${holidayLines.join('\n')}\n`;
+      // 计算到【最后一天的 24:00 / 次日00:00】
+      const lastDate = new Date(lastDay);
+      const endDate = new Date(lastDate);
+      endDate.setDate(endDate.getDate() + 1); // +1天 = 次日0点
+      const endBeijing = new Date(endDate.getTime() + 8 * 60 * 60 * 1000);
+
+      const ms = endBeijing - nowBeijing;
+      const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+      const h = Math.floor((ms % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+      const firstDate = new Date(firstDay);
+      const totalDays = Math.floor((firstDate - nowBeijing) / (1000 * 60 * 60 * 24));
+
+      if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
+        lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
+      } else {
+        lines.push(`${name}（还有 ${toMonthDay(totalDays)}）`);
       }
     }
 
-    // 3. 处理热搜
-    if (hot.status === 'fulfilled' && hot.value.data.list) {
-      finalMsg += `\n今日抖音热报：\n`;
-      const hots = hot.value.data.list.slice(0, 5).map(item => `${item.index}. ${item.title}`);
-      finalMsg += hots.join('\n') + "\n";
-    }
+    const festivalText = lines.length ? '\n最近假期：\n' + lines.join('\n') : '';
 
-    // 4. 处理一言
-    const yiyanStr = (hito.status === 'fulfilled' && hito.value.data) 
-      ? `\n${hito.value.data.hitokoto} —— ${hito.value.data.from}`
-      : "\n保持热爱，奔赴山海。";
-    
-    finalMsg += yiyanStr + "\n接抖音续火花5○-30○/月";
+    // 4. 抖音热搜 TOP5
+    const { data: hotData } = await axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10');
+    const hotList = hotData.list
+      .slice(0, 5)
+      .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
+      .join('\n');
 
-    return finalMsg.trim();
+    // 最终文案（已去掉标题）
+    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    msg += festivalText;
+    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}\n接抖音续火花5○-30○/月`;
 
+    return msg;
   } catch (e) {
-    return `保持热爱，奔赴山海`;
+    return '保持热爱，奔赴山海。';
   }
 }
 
