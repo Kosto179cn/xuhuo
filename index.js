@@ -19,7 +19,7 @@ const CONFIG = {
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
 
-// 三合一：一言 + 天气 + 节日日历（你提供的2个接口）
+// 四合一：一言 + 天气 + 节日日历 + 抖音热搜
 async function getHitokoto() {
   try {
     // 1. 获取一言
@@ -41,14 +41,18 @@ async function getHitokoto() {
     const lunar = `${dayInfo.lunar_month_name}${dayInfo.lunar_day_name}`;
     const festivalName = dayInfo.legal_holiday_name || '';
 
+    // 4. 获取抖音热搜 TOP10
+    const { data: hotData } = await axios.get('https://uapis.cn/api/v1/misc/hotboard?type=douyin&limit=10');
+    const hotList = hotData.list.map(item => `${item.index}. ${item.title}`).join('\n');
+
     // 拼接文案
-    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
+    let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar} \n\n`;
 
     if (festivalName) {
-      msg += `，今日节日：${festivalName}`;
+      msg += `今日节日：${festivalName}`;
     }
 
-    msg += `\n${yiyan}`;
+    msg += `\n\n抖音热搜 TOP10：\n${hotList}\n\n${yiyan}`;
 
     return msg;
 
