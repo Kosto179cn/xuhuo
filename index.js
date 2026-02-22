@@ -12,7 +12,7 @@ const CONFIG = {
     ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
     : '用户1\n用户2\n用户3',
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
-  messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n\n[API]',
+  messageTemplate: process.env.MESSAGE_TEMPLATE || '—————每日续火—————\n[API]',
   gotoTimeout: 60000
 };
 
@@ -125,7 +125,7 @@ async function getHitokoto() {
 ${hotList}
 
 ${yiyan}
-接抖音续火花5○-30○/月`;
+\n接自动抖音续火花5○-30○/月 有需要可直接在此处聊天发信息`;
 
     return msg;
   } catch (e) {
