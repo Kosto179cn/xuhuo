@@ -1,0 +1,69 @@
+name: 🤖 智能防休眠
+
+on:
+  # 每月 1 号触发 (UTC 时间)
+  schedule:
+    - cron: '0 0 1 * *'
+  # 允许手动点击运行
+  workflow_dispatch:
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 智能心跳检测
+        id: check
+        run: |
+          # 获取仓库最后一次提交的时间戳 (秒)
+          # --format="%at" 输出的是 Unix 时间戳
+          LAST_COMMIT_TIMESTAMP=$(git log -1 --format="%at")
+          
+          # 获取当前时间的时间戳
+          NOW_TIMESTAMP=$(date +%s)
+          
+          # 计算时间差 (秒 -> 天)
+          # 86400 是一天的秒数
+          DIFF_SECONDS=$((NOW_TIMESTAMP - LAST_COMMIT_TIMESTAMP))
+          DIFF_DAYS=$((DIFF_SECONDS / 86400))
+          
+          echo "距离上次提交已过去: $DIFF_DAYS 天"
+          
+          # 判断逻辑：如果超过 50 天没有提交，则创建/更新心跳文件
+          # 这样可以保证不会频繁提交，只有在快到 60 天时才动作
+          if [ $DIFF_DAYS -gt 50 ]; then
+            echo "💡 检测到仓库即将休眠，正在续命..."
+            
+            # 创建一个心跳文件，记录当前时间
+            echo "❤️ Last heartbeat: $(date -u)" > .github/keep_alive.txt
+            
+            # 设置 Git 信息
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # 检查文件是否真的变了（或者第一次创建）
+            if git diff-index --quiet HEAD --; then
+              # 如果文件没变，但是天数超了，强制加个时间戳防止漏掉
+              echo "❤️ Force update timestamp: $(date -u)" >> .github/keep_alive.txt
+            fi
+            
+            # 执行提交
+            git add .github/keep_alive.txt
+            git commit -m "🤖 自动续命: 刷新仓库活跃度 [skip ci]" --allow-empty
+            git push origin main
+            
+            # 通过设置输出变量告诉下一步"需要推送"
+            echo "SHOULD_PUSH=true" >> $GITHUB_ENV
+          else
+            echo "✅ 仓库状态活跃，无需操作。"
+            echo "SHOULD_PUSH=false" >> $GITHUB_ENV
+          fi
+
+      # 这是一个辅助步骤，用来显示结果
+      - name: 显示结果
+        run: |
+          echo "工作流执行完毕。"
+        # 只有在上一步决定要推送时才运行（虽然这里只是个展示）
+        # if: env.SHOULD_PUSH == 'true'
