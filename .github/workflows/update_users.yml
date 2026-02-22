@@ -1,0 +1,55 @@
+name: 用户名单管理系统
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '选择操作类型'
+        required: true
+        default: 'add'
+        type: choice
+        options:
+          - add
+          - delete
+          - reset
+      username:
+        description: '用户名 (操作类型为 reset 时可留空)'
+        required: false
+        type: string
+
+jobs:
+  manage_users:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: 执行修改逻辑
+        run: |
+          # 确保文件存在
+          touch users.txt
+          
+          ACTION="${{ github.event.inputs.action }}"
+          USER="${{ github.event.inputs.username }}"
+          
+          if [ "$ACTION" == "add" ]; then
+            # 检查是否已存在，不存在则添加
+            grep -qxF "$USER" users.txt || echo "$USER" >> users.txt
+            echo "已尝试添加用户: $USER"
+            
+          elif [ "$ACTION" == "delete" ]; then
+            # 删除匹配的行（精确匹配）
+            sed -i "/^$USER$/d" users.txt
+            echo "已尝试删除用户: $USER"
+            
+          elif [ "$ACTION" == "reset" ]; then
+            # 完全重写，支持输入多行
+            echo "$USER" > users.txt
+            echo "已重置名单"
+          fi
+
+      - name: 提交更新到仓库
+        run: |
+          git config --global user.name "UserBot"
+          git config --global user.email "bot@github.com"
+          git add users.txt
+          # 只有在文件有变动时才提交，防止报错
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update users: ${{ github.event.inputs.action }} $USER" && git push)
