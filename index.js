@@ -3,23 +3,24 @@ const axios = require('axios');
 
 const CONFIG = {
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  // 如果是 push 触发，ONLY_FOR_KOSTO 会有值，此时只处理 Kosto
+  // ⭐ 这里的逻辑确保：如果是 index.js 更新触发的，只给 Kosto 发
   targetUsers: process.env.ONLY_FOR_KOSTO 
     ? 'Kosto' 
     : (process.env.TARGET_USERS || ''),
   messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
+  gotoTimeout: 60000 // ⭐ 找回了你原来的 60 秒超时设置
 };
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
-// 获取天气和一言的函数 (保持不变)
+// ⭐ 找回了你原来的天气+一言完整逻辑
 async function getHitokoto() {
   try {
     const { data: hData } = await axios.get('https://v1.hitokoto.cn/');
     const { data: wData } = await axios.get('https://uapis.cn/api/v1/misc/weather?city=深圳&lang=zh');
     return `今日${wData.city}：${wData.weather}，气温${wData.temp}℃\n${hData.hitokoto} —— ${hData.from}`;
   } catch (e) {
-    return "祝你今天开心！";
+    return "祝你今天开心，万事顺意！";
   }
 }
 
@@ -27,7 +28,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
 
-  // --- 1. 修复 sameSite 报错：Cookie 清洗 ---
+  // --- Cookie 清洗 (修复 sameSite 报错) ---
   let cookies = [];
   try {
     cookies = JSON.parse(process.env.DOUYIN_COOKIES || '[]');
@@ -36,71 +37,74 @@ async function main() {
       if (!valid.includes(c.sameSite)) delete c.sameSite;
       return c;
     });
-  } catch (e) { log('error', 'Cookie 解析失败'); }
+  } catch (e) { log('error', 'Cookie 格式错误'); }
 
   await context.addCookies(cookies);
   const page = await context.newPage();
 
   try {
     log('info', `任务启动。目标模式: ${process.env.ONLY_FOR_KOSTO ? '代码更新(仅限Kosto)' : '全员轮询'}`);
-    await page.goto(CONFIG.url, { waitUntil: 'networkidle' });
+    
+    // ⭐ 使用 CONFIG 里的长超时
+    await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: CONFIG.gotoTimeout });
     await page.waitForTimeout(5000); 
 
     let pendingUsers = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
-    const nameSelector = '.item-header-name-vL_79m'; // 名字选择器
-    const gridSelector = '.ReactVirtualized__Grid'; // 滚动容器
+    const nameSelector = '.item-header-name-vL_79m';
+    const gridSelector = '.ReactVirtualized__Grid';
 
-    // 主循环：寻找并发送
     for (let cycle = 0; cycle < 50; cycle++) {
       if (pendingUsers.length === 0) {
-        log('success', '所有目标已处理完毕，任务结束。');
+        log('success', '✅ 所有目标已处理完毕！');
         break;
       }
 
-      // 获取当前可视区域的所有用户
+      // 获取当前可视的名字
       const visibleNames = await page.$$eval(nameSelector, els => els.map(el => el.innerText.trim()));
       
       for (const user of [...pendingUsers]) {
         if (visibleNames.includes(user)) {
-          log('info', `🎯 匹配到用户: ${user}，准备进入聊天界面...`);
+          log('info', `🎯 匹配到: ${user}，正在进入聊天界面...`);
           
-          // --- A. 点击左侧列表进入聊天 ---
-          const userElement = page.locator(nameSelector).filter({ hasText: user }).last();
-          await userElement.click();
-          await page.waitForTimeout(2000); // 等待右侧输入框加载
+          // 1. 先点击名字进入聊天界面
+          const userBtn = page.locator(nameSelector).filter({ hasText: user }).last();
+          await userBtn.click();
+          await page.waitForTimeout(3000); // 稍微多等一会儿让输入框加载
 
-          // --- B. 寻找输入框并发送 ---
+          // 2. 找到输入框并发送消息
           const inputSelector = 'div[contenteditable="true"]';
           try {
-            await page.waitForSelector(inputSelector, { timeout: 5000 });
-            const apiContent = await getHitokoto();
-            const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
+            await page.waitForSelector(inputSelector, { timeout: 10000 });
+            const content = await getHitokoto();
+            const finalMsg = CONFIG.messageTemplate.replace('[API]', content);
 
             await page.focus(inputSelector);
-            await page.keyboard.type(finalMsg, { delay: 50 });
+            // 模拟真人打字
+            await page.keyboard.type(finalMsg, { delay: 60 });
             await page.keyboard.press('Enter');
             
             log('success', `✨ 已成功发给: ${user}`);
-            pendingUsers = pendingUsers.filter(u => u !== user); // 从待办移除
+            pendingUsers = pendingUsers.filter(u => u !== user); // 标记完成
             await page.waitForTimeout(2000);
           } catch (e) {
-            log('error', `进入 ${user} 界面后未找到输入框，跳过`);
+            log('error', `❌ 没找到 ${user} 的输入框，可能是界面没跳过去`);
           }
         }
       }
 
-      // --- C. 如果还没找齐，执行【可视小幅下划】 ---
+      // --- 如果没找齐，执行【对位】的可视化小幅滑动 ---
       if (pendingUsers.length > 0) {
-        log('info', `未找齐目标，正在执行可视下划寻找: ${pendingUsers.join(', ')}`);
+        log('info', `未找齐，执行可视化下划... (剩余: ${pendingUsers.join(',')})`);
         const box = await page.locator(gridSelector).boundingBox();
         if (box) {
           await page.mouse.move(box.x + 50, box.y + 100);
-          for (let step = 0; step < 3; step++) {
-            await page.mouse.wheel(0, 150); // 每次滚一小段
-            await page.waitForTimeout(200); 
+          // 这里就是你要求的“不要太大”的小幅效果
+          for (let s = 0; s < 3; s++) {
+            await page.mouse.wheel(0, 180); 
+            await page.waitForTimeout(300); 
           }
         }
-        await page.waitForTimeout(1500); // 给 React 留出渲染新用户的时间
+        await page.waitForTimeout(2000); // 等待 React 渲染新 HTML
       }
     }
   } catch (err) {
