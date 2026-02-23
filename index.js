@@ -7,15 +7,15 @@ const path = require('path');
 const CONFIG = {
   // 抖音创作者后台私信页面URL
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  // 读取目标用户：优先从环境变量 TARGET_USERS 读取（非空时），其次从 users.txt 文件读取
-  targetUsers: process.env.TARGET_USERS?.trim() 
-    ? process.env.TARGET_USERS 
-    : (fs.existsSync(path.join(__dirname, 'users.txt'))
-        ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
-        : '用户1\n用户2\n用户3'),
+  // 读取目标用户
+  targetUsers: fs.existsSync(path.join(__dirname, 'users.txt'))
+    ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
+    : '用户1\n用户2\n用户3',
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
   messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
-  gotoTimeout: 60000
+  gotoTimeout: 60000,
+  // ⭐ 单人模式：如果设置了环境变量，则只发送给该用户
+  onlyFor: process.env.ONLY_FOR_KOSTO || ''
 };
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
@@ -206,14 +206,14 @@ async function main() {
   // 1. 初始化
   let users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
   
-  // ⭐ 单人模式：如果设置了 ONLY_FOR_KOSTO，只给指定用户发消息
-  const onlyForUser = process.env.ONLY_FOR_KOSTO;
-  if (onlyForUser && onlyForUser.trim() !== '') {
-    log('info', `👤 单人模式：仅发送给 ${onlyForUser}`);
-    users = users.filter(u => u === onlyForUser);
-    if (users.length === 0) {
-      log('error', `❌ 用户列表中未找到 ${onlyForUser}`);
-      process.exit(1);
+  // ⭐ 核心逻辑：如果是单人模式，只保留指定用户
+  if (CONFIG.onlyFor) {
+    const onlyUser = CONFIG.onlyFor.trim();
+    if (users.includes(onlyUser)) {
+      users = [onlyUser];
+      log('info', `🎯 单人模式已启用，仅发送给: ${onlyUser}`);
+    } else {
+      log('warn', `⚠️ 单人模式用户 "${onlyUser}" 不在用户列表中，将使用完整列表`);
     }
   }
   let rawCookies;
