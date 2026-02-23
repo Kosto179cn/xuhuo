@@ -7,10 +7,12 @@ const path = require('path');
 const CONFIG = {
   // 抖音创作者后台私信页面URL
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  // 读取目标用户
-  targetUsers: fs.existsSync(path.join(__dirname, 'users.txt'))
-    ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
-    : '用户1\n用户2\n用户3',
+  // 读取目标用户：优先从环境变量 TARGET_USERS 读取（非空时），其次从 users.txt 文件读取
+  targetUsers: process.env.TARGET_USERS?.trim() 
+    ? process.env.TARGET_USERS 
+    : (fs.existsSync(path.join(__dirname, 'users.txt'))
+        ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
+        : '用户1\n用户2\n用户3'),
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
   messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
   gotoTimeout: 60000
