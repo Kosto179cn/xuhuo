@@ -201,116 +201,84 @@ async function scrollAndFindUser(page, username) {
 }
 
 async function main() {
-  // 1. 初始化
-  const users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
-  let rawCookies;
-  try {
-    rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
-  } catch (e) {
-    log('error', 'COOKIES JSON 解析失败');
-    process.exit(1);
-  }
-
-  const cleanCookies = fixCookies(rawCookies);
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  });
+  const browser = await chromium.launch({ headless: true }); // GitHub Actions 运行
+  const context = await browser.newContext();
+  
+  // 注入 Cookie
+  const cookies = JSON.parse(process.env.DOUYIN_COOKIES || '[]');
+  await context.addCookies(cookies);
+  const page = await context.newPage();
 
   try {
-    await context.addCookies(cleanCookies);
-    const page = await context.newPage();
-    log('info', '🚀 正在进入抖音页面...');
-    await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded', timeout: CONFIG.gotoTimeout });
-    await page.waitForTimeout(10000);
+    log('info', '正在打开私信页面...');
+    await page.goto(CONFIG.url, { waitUntil: 'networkidle', timeout: CONFIG.gotoTimeout });
+    await page.waitForTimeout(5000); 
 
-    if (page.url().includes('login')) {
-      log('error', '❌ Cookie 已失效');
-      return;
-    }
+    // 获取待办用户列表
+    let pendingUsers = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+    const nameSelector = '.item-header-name-vL_79m';
+    const gridSelector = '.ReactVirtualized__Grid';
 
-    // 💡 获取一次通用内容
-    const apiContent = await getHitokoto();
-    const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
-    const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
+    // 每一轮滑动的逻辑
+    for (let cycle = 0; cycle < 50; cycle++) {
+      if (pendingUsers.length === 0) break;
 
-    // 2. 核心逻辑：逐个处理用户
-    // 使用 filter 模拟 "待办列表"，当列表为空时结束
-    let pendingUsers = [...users]; // 创建副本，避免修改原数组
-    let totalSent = 0;
-
-    // 只要还有待发送的用户，就继续循环
-    while (pendingUsers.length > 0) {
-      // 记录本次滚动前的列表长度，用于判断是否有用户被成功发送
-      const beforeLength = pendingUsers.length;
+      // 1. 获取当前视口所有可见名字
+      const visibleNames = await page.$$eval(nameSelector, els => els.map(el => el.innerText.trim()));
       
-      // 遍历当前页面可见区域（模拟滚动查找）
-      for (let i = 0; i < 30; i++) {
-        // 检查是否还有用户需要发送
-        if (pendingUsers.length === 0) break;
+      let foundInThisRound = false;
+      for (const user of pendingUsers) {
+        if (visibleNames.includes(user)) {
+          log('info', `🎯 找到目标用户: ${user}`);
+          // 点击用户（增加一点延迟模拟真人）
+          await page.locator(nameSelector).filter({ hasText: user }).last().click();
+          await page.waitForTimeout(2000);
 
-        // 在当前页面视图中尝试查找并发送给待办列表中的用户
-        const result = await page.evaluate((usernames) => {
-          const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
-          // 遍历页面上的所有用户名元素
-          for (const el of spans) {
-            const text = el.textContent.trim();
-            // 如果这个元素是待办列表中的用户
-            if (usernames.includes(text)) {
-              el.scrollIntoView();
-              el.click(); // 点击进入聊天
-              return { found: true, username: text }; // 返回找到的用户名
-            }
-          }
-          return { found: false, username: null };
-        }, pendingUsers);
-
-        if (result.found) {
-          const user = result.username;
-          try {
-            await page.waitForTimeout(2000);
-            await page.waitForSelector(inputSelector, { timeout: 8000 });
-            
-            await typeRealMessage(page, inputSelector, finalMsg);
-            
-            log('success', `✨ 已发给: ${user} (标记为已完成)`);
-            totalSent++;
-
-            // ⭐ 关键步骤：从待办列表中移除该用户 (标记完成)
-            pendingUsers = pendingUsers.filter(u => u !== user);
-            
-            await page.waitForTimeout(3000); // 发送间隔
-          } catch (e) {
-            log('error', `❌ ${user} 发送失败，将在下一轮重试`);
-            // 如果发送失败，不从列表中移除，下一轮继续尝试
-            await page.waitForTimeout(2000);
-          }
-        } else {
-          // 如果当前这一轮滚动没有找到任何待办用户，向下滚动继续找
-          await page.evaluate(() => {
-            const grid = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
-            if (grid) grid.scrollTop += 600;
-            else window.scrollBy(0, 600);
-          });
-          await page.waitForTimeout(1500);
+          // --- 发送消息逻辑 ---
+          const apiContent = await getHitokoto();
+          const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
+          const inputSelector = 'div[contenteditable="true"]';
+          
+          await page.focus(inputSelector);
+          await page.keyboard.type(finalMsg, { delay: 50 });
+          await page.keyboard.press('Enter');
+          
+          log('success', `✨ 已发给: ${user}`);
+          pendingUsers = pendingUsers.filter(u => u !== user); // 移除已完成
+          foundInThisRound = true;
+          await page.waitForTimeout(3000);
         }
       }
 
-      // 3. 完成判断
-      // 如果经过一轮完整的滚动查找（30次），待办列表长度没有变化
-      // 说明剩下的用户可能不存在，或者网络卡顿，为了避免死循环，强制退出
-      const afterLength = pendingUsers.length;
-      if (afterLength === beforeLength) {
-        log('warn', `⚠️ 经过一轮查找未发现新用户，剩余 ${afterLength} 人可能无法送达:`, pendingUsers.join(', '));
-        break;
+      // 2. 如果没找齐，执行“可视小幅滚动”
+      if (pendingUsers.length > 0) {
+        log('info', `未找齐，执行可视化小幅下划 (当前剩余: ${pendingUsers.length}人)...`);
+        
+        // 确保鼠标在侧边栏区域
+        const gridBox = await page.locator(gridSelector).boundingBox();
+        if (gridBox) {
+          await page.mouse.move(gridBox.x + 50, gridBox.y + 100);
+          
+          // --- 核心改动：小步幅物理滚动 ---
+          // 每次只滚 100px，分 4 次滚，每步停顿，确保 React 能反应过来
+          for (let step = 0; step < 4; step++) {
+            await page.mouse.wheel(0, 100); // 往下拨动 100 像素
+            await page.waitForTimeout(150); // 微调停顿，产生“可视”滚动感
+          }
+        }
+
+        // 补一个 scroll 事件通知 React 重绘 DOM
+        await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          if (el) el.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }, gridSelector);
+
+        await page.waitForTimeout(1500); // 等待新名字渲染
       }
     }
-
-    log('info', `🏁 任务结束，成功发送 ${totalSent}/${users.length} 人`);
-
-  } catch (e) {
-    log('error', `致命错误: ${e.message}`);
+  } catch (err) {
+    log('error', `运行出错: ${err.message}`);
+    await page.screenshot({ path: 'debug_error.png' });
   } finally {
     await browser.close();
   }
