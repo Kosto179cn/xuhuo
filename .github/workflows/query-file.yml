@@ -1,38 +1,35 @@
-name: 📁 批量查询仓库内文件
+name: Douyin Batch Query
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 8 * * *'  # 每天 UTC 8点
+  workflow_dispatch: # 支持手动触发
 
 jobs:
-  batch-query:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 🛒 检出代码
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: 🟩 设置 Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '20'
 
-      - name: 📦 安装 Puppeteer
-        run: npm install puppeteer
+      - name: Install Dependencies
+        run: |
+          npm install puppeteer
 
-      - name: 🚀 运行批量查询 (读取文件模式)
-        # 运行我们重命名后的脚本
+      - name: Run Scraper
+        env:
+          # 这里引用你在 Settings -> Secrets -> Actions 里保存的内容
+          Dou_Yin_Cookie: ${{ secrets.Dou_Yin_Cookie }}
         run: node file-batch.js
 
-      - name: 📤 提交结果
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if git diff --quiet HEAD -- output.json; then
-            echo "ℹ️ 数据未变化，跳过提交。"
-          else
-            git add output.json
-            git commit -m "🤖 自动更新: 批量查询结果 $(date)"
-            git push origin main
-          fi
+      - name: Upload Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: query-results
+          path: |
+            output.json
+            *.png
