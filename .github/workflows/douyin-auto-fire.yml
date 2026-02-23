@@ -1,9 +1,12 @@
 name: 抖音续火花自动任务
 
 on:
+  push:
+    paths:
+      - 'index.js' # 只有当 index.js 文件修改时才触发
   schedule:
-    - cron: '10 16 * * *'
-  workflow_dispatch:
+    - cron: '10 16 * * *' # 保持原定时间 (北京时间 00:10)
+  workflow_dispatch: # 保留手动触发按钮
 
 jobs:
   auto-fire:
@@ -27,14 +30,13 @@ jobs:
       - name: 运行自动发送脚本
         env:
           DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
-          TARGET_USERS: ${{ secrets.TARGET_USERS }}
+          TARGET_USERS: ${{ secrets.TARGET_USERS }} # 确保脚本内优先读取此变量
         run: node index.js
       
-      - name: 上传错误截图 (失效时必看)
+      - name: 上传错误截图
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
-          path: "*.png" # index.js 报错时生成的截图
-
+          path: "*.png"
           retention-days: 3
