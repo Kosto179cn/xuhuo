@@ -1,12 +1,12 @@
-name: Douyin ID Scraper (Gitee Secret Mode)
+name: Douyin ID Scraper (Stealth Mode)
 
 on:
   workflow_dispatch: # 手动触发
   schedule:
-    - cron: '0 * * * *' # 每小时执行一次
+    - cron: '0 * * * *' # 每小时运行一次
   push:
     paths:
-      - 'file-batch.js' # 文件更新自动执行
+      - 'file-batch.js' # 修改脚本自动运行
 
 jobs:
   scrape_job:
@@ -23,9 +23,10 @@ jobs:
 
       - name: Install Puppeteer and OS Libs
         run: |
-          npm install puppeteer axios
+          # 安装核心包和隐身插件包
+          npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth axios
           sudo apt-get update
-          # 下面这一行修复了 libasound2 找不到的问题
+          # 针对 Ubuntu 24.04 优化的系统依赖库
           sudo apt-get install -y libgbm-dev libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpango-1.0-0 libasound2t64
 
       - name: Execute Scraper Script
