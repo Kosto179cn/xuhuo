@@ -14,7 +14,7 @@ async function getIdsFromGitee() {
     const apiUrl = `https://gitee.com/api/v5/repos/${owner}/${repo}/contents/${path}?access_token=${token}`;
     
     try {
-        console.log(`[INFO] 正在从 Gitee 获取私密名单...`);
+        console.log(`[INFO] 正在尝试从 Gitee 获取私密名单...`);
         const response = await axios.get(apiUrl);
         const content = Buffer.from(response.data.content, 'base64').toString('utf8');
         const ids = content.split('\n').map(l => l.trim()).filter(l => l);
@@ -39,7 +39,6 @@ async function getIdsFromGitee() {
         process.exit(1);
     }
 
-    // 启动浏览器，强化稳定参数
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
@@ -55,11 +54,11 @@ async function getIdsFromGitee() {
     const results = [];
 
     for (const douyin_id of inputIds) {
-        console.log(`\n🔎 正在定位: ${douyin_id}`);
+        console.log(`\n🔎 正在定位 ID: ${douyin_id}`);
         const page = await browser.newPage();
         
         try {
-            // 【提速核心】拦截无关资源，大幅减少加载时间
+            // 【提速】拦截图片和样式，专注于文本抓取
             await page.setRequestInterception(true);
             page.on('request', (req) => {
                 const type = req.resourceType();
@@ -74,47 +73,54 @@ async function getIdsFromGitee() {
             await page.setViewport({ width: 1280, height: 800 });
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-            // 【跳坑核心】直接进入搜索结果页，避开重负载的首页
+            // 【直达】直达搜索用户页
             const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(douyin_id)}?type=user`;
             
-            console.log(`🛰️  直达搜索页: ${douyin_id}`);
+            console.log(`🛰️  访问地址: ${searchUrl}`);
             await page.goto(searchUrl, { 
                 waitUntil: 'domcontentloaded', 
-                timeout: 45000 // 增加宽限期至 45 秒
+                timeout: 45000 
             });
 
-            // 等待用户卡片渲染（DOM 加载后 AJAX 渲染需要一点时间）
-            await new Promise(r => setTimeout(r, 6000));
+            // 【优化建议】增加等待时间到 10 秒，确保异步数据渲染完成
+            console.log(`⏳ 等待页面渲染 (10s)...`);
+            await new Promise(r => setTimeout(r, 10000));
 
-            // 提取昵称
+            // 【核心修复】深度提取逻辑
             const nickname = await page.evaluate((targetId) => {
-                // 1. 寻找包含“抖音号: targetId”文本的节点
+                // 1. 获取所有 span 标签
                 const spans = Array.from(document.querySelectorAll('span'));
-                const idNode = spans.find(s => 
-                    s.innerText.replace(/\s+/g, '').includes('抖音号:') && 
-                    s.innerText.toLowerCase().includes(targetId.toLowerCase())
-                );
+                
+                // 2. 寻找包含“抖音号：搜索ID”的文字节点（不区分大小写，去除空格干扰）
+                const idNode = spans.find(s => {
+                    const text = s.innerText.replace(/\s+/g, ''); 
+                    return text.includes('抖音号:') && text.toLowerCase().includes(targetId.toLowerCase());
+                });
 
                 if (idNode) {
-                    // 2. 向上寻找最近的卡片容器
+                    // 3. 向上回溯到用户卡片容器
                     const card = idNode.closest('[data-e2e="user-card"]') || 
                                  idNode.closest('.search-result-card') ||
                                  idNode.parentElement.parentElement.parentElement;
                     
-                    // 3. 在卡片内寻找昵称（通常是 p 标签或特定的 span）
-                    const nickEl = card.querySelector('p') || 
-                                   card.querySelector('span[class*="name"]') ||
-                                   card.querySelector('h2');
-                    return nickEl ? nickEl.innerText.trim() : null;
+                    if (card) {
+                        // 4. 在卡片中抓取第一个看起来像昵称的元素
+                        // 逻辑：找第一个 P 标签，或者带 name/nick 字眼的元素
+                        const nickEl = card.querySelector('p') || 
+                                       card.querySelector('span[class*="name"]') ||
+                                       card.querySelector('h2');
+                        
+                        return nickEl ? nickEl.innerText.trim() : null;
+                    }
                 }
                 return null;
             }, douyin_id);
 
             if (nickname) {
-                console.log(`✅ 获取成功: ${douyin_id} -> ${nickname}`);
+                console.log(`✅ 匹配成功: ${douyin_id} -> ${nickname}`);
                 results.push(`${douyin_id}-${nickname}`);
             } else {
-                console.log(`⚠️ 未找到匹配名称: ${douyin_id}`);
+                console.log(`⚠️ 找到 ID 标记但提取名称失败: ${douyin_id}`);
                 results.push(`${douyin_id}-未匹配`);
             }
         } catch (err) {
@@ -124,12 +130,10 @@ async function getIdsFromGitee() {
             await page.close();
         }
         
-        // 账号之间稍微喘息一下，防止触发风控
         await new Promise(r => setTimeout(r, 2000));
     }
 
-    // 最终导出结果文件
     fs.writeFileSync('user_id.txt', results.join('\n'), 'utf-8');
     await browser.close();
-    console.log('\n✨ 程序 A 任务圆满完成');
+    console.log('\n✨ 程序 A 任务圆满完成，user_id.txt 已生成');
 })();
