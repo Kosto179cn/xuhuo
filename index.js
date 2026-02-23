@@ -202,7 +202,18 @@ async function scrollAndFindUser(page, username) {
 
 async function main() {
   // 1. 初始化
-  const users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+  let users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+  
+  // ⭐ 单人模式：如果设置了 ONLY_FOR_KOSTO，只给指定用户发消息
+  const onlyForUser = process.env.ONLY_FOR_KOSTO;
+  if (onlyForUser && onlyForUser.trim() !== '') {
+    log('info', `👤 单人模式：仅发送给 ${onlyForUser}`);
+    users = users.filter(u => u === onlyForUser);
+    if (users.length === 0) {
+      log('error', `❌ 用户列表中未找到 ${onlyForUser}`);
+      process.exit(1);
+    }
+  }
   let rawCookies;
   try {
     rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
