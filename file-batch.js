@@ -2,86 +2,118 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 
 (async () => {
+    // 1. 获取环境变量中的 Cookie
     const cookieStr = process.env.Dou_Yin_Cookie;
-    if (!cookieStr) { console.error('❌ 未发现 Cookie'); process.exit(1); }
+    if (!cookieStr) {
+        console.error('❌ 错误: 未在 GitHub Secrets 中找到 Dou_Yin_Cookie');
+        process.exit(1);
+    }
 
-    let input = fs.readFileSync('input.txt', 'utf-8');
-    const lines = input.split('\n').map(l => l.trim()).filter(l => l);
-    
+    // 2. 读取待查询列表
+    let input;
+    try {
+        input = fs.readFileSync('input.txt', 'utf-8');
+    } catch (err) {
+        console.error('❌ 未找到 input.txt 文件');
+        process.exit(1);
+    }
+
+    const lines = input.split('\n').map(line => line.trim()).filter(line => line);
+    console.log(`📝 发现 ${lines.length} 个抖音号需要查询`);
+
+    // 3. 启动浏览器（针对 Actions 环境优化）
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
-            '--no-sandbox', 
-            '--disable-blink-features=AutomationControlled',
-            '--window-size=1280,800'
-        ]
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled'
+        ],
     });
 
-    const cookies = cookieStr.split(';').map(pair => {
-        const [name, ...value] = pair.trim().split('=');
-        return { name, value: value.join('='), domain: '.douyin.com' };
-    });
+    // 4. 解析 Cookie (修复 Protocol Error)
+    const cookies = cookieStr.split(';')
+        .map(pair => {
+            const index = pair.indexOf('=');
+            if (index === -1) return null;
+            const name = pair.substring(0, index).trim();
+            const value = pair.substring(index + 1).trim();
+            if (!name) return null;
+            return {
+                name: name,
+                value: value,
+                domain: '.douyin.com',
+                path: '/',
+                secure: true
+            };
+        })
+        .filter(c => c !== null);
 
-    const results = [];
+    const finalResults = [];
 
     for (const douyin_id of lines) {
-        console.log(`\n🔎 搜索中: ${douyin_id}`);
+        console.log(`\n🔍 正在检索: ${douyin_id}`);
         const page = await browser.newPage();
-        await page.setCookie(...cookies);
-        // 伪装浏览器指纹
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
+        
         try {
-            // 1. 跳转到搜索结果页 (直接跳转比模拟点击更稳)
+            // 设置 Cookie 和伪装 User-Agent
+            await page.setCookie(...cookies);
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            
+            // 直接跳转搜索页 (User标签下)
             const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(douyin_id)}?type=user`;
             await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-            // 2. 增加随机延迟，模拟真人
-            await new Promise(r => setTimeout(r, Math.random() * 2000 + 1000));
+            // 等待页面加载
+            await new Promise(r => setTimeout(r, 4000));
 
-            // 3. 核心：通过 DOM 内容匹配（不依赖具体 Class）
-            const userData = await page.evaluate((targetId) => {
-                // 获取所有搜索结果卡片，通常它们都有 data-e2e="user-card" 或类似结构
-                // 如果没有，我们直接找包含“抖音号:”文本的容器
-                const allElements = Array.from(document.querySelectorAll('div, a, p'));
+            // 在页面中寻找匹配的抖音号及其昵称
+            const result = await page.evaluate((targetId) => {
+                // 找到所有卡片容器
+                const cards = Array.from(document.querySelectorAll('div, a')).filter(el => el.innerText && el.innerText.includes('抖音号:'));
                 
-                // 找到那个显示“抖音号: xxx”的 span 或 div
-                const idContainer = allElements.find(el => 
-                    el.textContent.includes('抖音号:') && 
-                    el.textContent.includes(targetId)
-                );
-
-                if (idContainer) {
-                    // 向上找最近的卡片容器
-                    const card = idContainer.closest('a') || idContainer.parentElement;
-                    // 昵称通常在卡片里唯一的 H1, H2 或特定的加粗文本中
-                    // 我们找卡片内第一个不包含“抖音号”且字号较大的文本
-                    const nickname = card.innerText.split('\n')[0].trim(); 
-                    
-                    return { id: targetId, nickname: nickname };
+                for (const card of cards) {
+                    // 检查是否包含精确的抖音号文本
+                    if (card.innerText.includes(`抖音号: ${targetId}`) || card.innerText.includes(`抖音号:${targetId}`)) {
+                        // 昵称通常是卡片中第一个非空文本，或者是特定的加粗元素
+                        // 这里采用从当前元素向上找最近的锚点(a标签)再提取首行文本的逻辑
+                        const container = card.closest('a') || card;
+                        const lines = container.innerText.split('\n').map(s => s.trim()).filter(s => s);
+                        return {
+                            id: targetId,
+                            nickname: lines[0] || '未知昵称'
+                        };
+                    }
                 }
                 return null;
             }, douyin_id);
 
-            if (userData) {
-                results.push(`${userData.id}-${userData.nickname}`);
-                console.log(`✅ 成功获取: ${userData.id}-${userData.nickname}`);
+            if (result) {
+                const entry = `${result.id}-${result.nickname}`;
+                finalResults.push(entry);
+                console.log(`✅ 匹配到: ${entry}`);
             } else {
-                // 如果没找到，截图看看是不是跳验证码了
-                await page.screenshot({ path: `debug_${douyin_id}.png` });
-                results.push(`${douyin_id}-未找到或触发验证`);
-                console.log(`⚠️ 未匹配: ${douyin_id} (已截图)`);
+                // 截图调试（在 Actions 的 Artifacts 中查看）
+                await page.screenshot({ path: `miss_${douyin_id}.png` });
+                finalResults.push(`${douyin_id}-未匹配`);
+                console.log(`⚠️ 未找到匹配项: ${douyin_id}`);
             }
 
-        } catch (err) {
-            console.error(`❌ 出错: ${err.message}`);
+        } catch (error) {
+            console.error(`❌ 查询 ${douyin_id} 发生异常:`, error.message);
+            finalResults.push(`${douyin_id}-查询异常`);
         } finally {
             await page.close();
         }
-        await new Promise(r => setTimeout(r, 3000)); 
+
+        // 随机停顿 3-5 秒，防止封禁
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 3000));
     }
 
-    fs.writeFileSync('user_id.txt', results.join('\n'), 'utf-8');
     await browser.close();
-    console.log('\n🎉 user_id.txt 已更新');
+
+    // 5. 保存结果到 user_id.txt
+    fs.writeFileSync('user_id.txt', finalResults.join('\n'), 'utf-8');
+    console.log('\n🎉 处理完成，结果已存入 user_id.txt');
 })();
