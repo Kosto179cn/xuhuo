@@ -2,6 +2,11 @@ name: Douyin ID Scraper (Gitee Secret Mode)
 
 on:
   workflow_dispatch: # 手动触发
+  schedule:
+    - cron: '0 * * * *' # 每小时执行一次 (UTC时间 0分执行)
+  push:
+    paths:
+      - 'file-batch.js' # 只要 file-batch.js 文件有变动提交，立即触发
 
 jobs:
   scrape_job:
@@ -18,21 +23,23 @@ jobs:
 
       - name: Install Puppeteer and OS Libs
         run: |
-          # 必须安装 axios 来访问 Gitee API
           npm install puppeteer axios
           sudo apt-get update
-          sudo apt-get install -y libgbm-dev libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpango-1.0-0 libasound2t64
+          sudo apt-get install -y libgbm-dev libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpango-1.0-0 libasound2
 
       - name: Execute Scraper Script
         env:
           Dou_Yin_Cookie: ${{ secrets.Dou_Yin_Cookie }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }} # 必须在 GitHub Secrets 中配置此项
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: node file-batch.js
 
       - name: Upload Results as Artifact
+        if: always() # 确保就算报错了也会上传，方便看截图
         uses: actions/upload-artifact@v4
         with:
           name: douyin-id-results
-          path: user_id.txt
-          retention-days: 1 # 隐私起见，产物只保留1天
+          path: |
+            user_id.txt
+            *.png
+          retention-days: 90
           overwrite: true
