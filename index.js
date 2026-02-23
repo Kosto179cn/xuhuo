@@ -204,17 +204,17 @@ async function scrollAndFindUser(page, username) {
 
 async function main() {
   // 1. 初始化
-  let users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+  let users;
   
-  // ⭐ 核心逻辑：如果是单人模式，只保留指定用户
+  // ⭐ 核心逻辑：如果是单人模式，直接忽略 users.txt，强制使用指定用户
   if (CONFIG.onlyFor) {
     const onlyUser = CONFIG.onlyFor.trim();
-    if (users.includes(onlyUser)) {
-      users = [onlyUser];
-      log('info', `🎯 单人模式已启用，仅发送给: ${onlyUser}`);
-    } else {
-      log('warn', `⚠️ 单人模式用户 "${onlyUser}" 不在用户列表中，将使用完整列表`);
-    }
+    users = [onlyUser];
+    log('info', `🎯 单人模式已启用，仅发送给: ${onlyUser}`);
+  } else {
+    // 正常模式：从 users.txt 读取用户列表
+    users = CONFIG.targetUsers.split('\n').map(u => u.trim()).filter(u => u);
+    log('info', `📋 已加载 ${users.length} 位用户`);
   }
   let rawCookies;
   try {
