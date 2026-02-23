@@ -1,4 +1,4 @@
-name: Douyin ID Batch Scraper
+name: Douyin ID Batch Scraper (Private Mode)
 
 on:
   workflow_dispatch:
@@ -7,8 +7,9 @@ jobs:
   scrape_job:
     runs-on: ubuntu-latest
     
+    # 注意：此时不再需要 contents: write 权限，因为我们不写仓库，只传产物
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout Repository
@@ -23,7 +24,6 @@ jobs:
         run: |
           npm install puppeteer
           sudo apt-get update
-          # 兼容最新 Ubuntu 系统的依赖列表
           sudo apt-get install -y libgbm-dev libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpango-1.0-0 libasound2t64
 
       - name: Execute Scraper Script
@@ -31,16 +31,11 @@ jobs:
           Dou_Yin_Cookie: ${{ secrets.Dou_Yin_Cookie }}
         run: node file-batch.js
 
-      - name: Commit and Push Changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if [ -f "user_id.txt" ]; then
-            git add user_id.txt
-            git commit -m "chore: update user_id.txt [skip ci]" || echo "Nothing to commit"
-            git push origin main
-          else
-            echo "❌ 文件未生成"
-            exit 1
-          fi
+      # 【核心修改】不提交代码，将结果作为产物上传
+      - name: Upload Results as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-id-results    # 产物包的名字
+          path: user_id.txt          # 要上传的文件
+          retention-days: 7          # 在 GitHub 存多久（过期自动删除）
+          overwrite: true            # 如果多次运行，覆盖同名产物
