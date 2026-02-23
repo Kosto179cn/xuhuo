@@ -1,16 +1,12 @@
-name: Douyin ID Batch Scraper (Private Mode)
+name: Douyin ID Scraper (Gitee Secret Mode)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 手动触发
 
 jobs:
   scrape_job:
     runs-on: ubuntu-latest
     
-    # 注意：此时不再需要 contents: write 权限，因为我们不写仓库，只传产物
-    permissions:
-      contents: read
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -22,20 +18,21 @@ jobs:
 
       - name: Install Puppeteer and OS Libs
         run: |
-          npm install puppeteer
+          # 必须安装 axios 来访问 Gitee API
+          npm install puppeteer axios
           sudo apt-get update
           sudo apt-get install -y libgbm-dev libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcb-dri3-0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 libxrandr2 libxtst6 libpango-1.0-0 libasound2t64
 
       - name: Execute Scraper Script
         env:
           Dou_Yin_Cookie: ${{ secrets.Dou_Yin_Cookie }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }} # 必须在 GitHub Secrets 中配置此项
         run: node file-batch.js
 
-      # 【核心修改】不提交代码，将结果作为产物上传
       - name: Upload Results as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: douyin-id-results    # 产物包的名字
-          path: user_id.txt          # 要上传的文件
-          retention-days: 7          # 在 GitHub 存多久（过期自动删除）
-          overwrite: true            # 如果多次运行，覆盖同名产物
+          name: douyin-id-results
+          path: user_id.txt
+          retention-days: 1 # 隐私起见，产物只保留1天
+          overwrite: true

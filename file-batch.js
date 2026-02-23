@@ -1,5 +1,30 @@
 const puppeteer = require('puppeteer');
+const axios = require('axios');
 const fs = require('fs');
+
+async function getIdsFromGitee() {
+    const token = process.env.GITEE_TOKEN;
+    const owner = "Kosto179";
+    const repo = "kosto-battle-clicker-new";
+    const path = "douyinh.txt";
+    
+    // 智能转换后的 Gitee API 地址
+    const apiUrl = `https://gitee.com/api/v5/repos/${owner}/${repo}/contents/${path}?access_token=${token}`;
+    
+    try {
+        console.log(`[INFO] 正在从 Gitee 私有仓库读取名单...`);
+        const response = await axios.get(apiUrl);
+        // Gitee API 返回内容是 Base64 编码的，需要解码
+        const content = Buffer.from(response.data.content, 'base64').toString('utf8');
+        const ids = content.split('\n').map(l => l.trim()).filter(l => l);
+        console.log(`[SUCCESS] 成功加载 ${ids.length} 个抖音号`);
+        return ids;
+    } catch (error) {
+        console.error(`[ERROR] Gitee 读取失败: ${error.response?.status || error.message}`);
+        // 如果 API 失败，尝试读取本地文件兜底（可选）
+        return [];
+    }
+}
 
 (async () => {
     const rawCookie = process.env.Dou_Yin_Cookie;
@@ -8,23 +33,20 @@ const fs = require('fs');
         process.exit(1);
     }
 
-    // 读取 ID 列表
-    let inputIds = [];
-    try {
-        inputIds = fs.readFileSync('input.txt', 'utf-8').split('\n').map(l => l.trim()).filter(l => l);
-    } catch (e) {
-        console.error('❌ 未找到 input.txt');
+    // 1. 获取私密名单
+    const inputIds = await getIdsFromGitee();
+    if (inputIds.length === 0) {
+        console.error('❌ 未获取到待查询名单，请检查 Gitee Token 和文件路径');
         process.exit(1);
     }
 
-    // 启动浏览器
+    // 2. 启动浏览器
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            '--disable-blink-features=AutomationControlled'
         ]
     });
 
@@ -38,18 +60,18 @@ const fs = require('fs');
         try {
             await page.setCookie(...cookies);
             await page.setViewport({ width: 1440, height: 900 });
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-            // 1. 进首页
-            await page.goto('https://www.douyin.com/', { waitUntil: 'networkidle2', timeout: 60000 });
+            // 进首页
+            await page.goto('https://www.douyin.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
             
-            // 2. 模拟真实打字搜索
+            // 搜索
             const inputSelector = '[data-e2e="searchbar-input"]';
             await page.waitForSelector(inputSelector, { timeout: 10000 });
-            await page.click(inputSelector);
             await page.type(inputSelector, douyin_id, { delay: 100 });
             await page.click('[data-e2e="searchbar-button"]');
 
-            // 3. 切换标签
+            // 切换到“用户”标签
             await page.waitForNavigation({ waitUntil: 'networkidle2' });
             await page.evaluate(() => {
                 const tabs = Array.from(document.querySelectorAll('span'));
@@ -58,18 +80,16 @@ const fs = require('fs');
             });
             await new Promise(r => setTimeout(r, 4500));
 
-            // 4. 精准定位提取
+            // 提取结果
             const nickname = await page.evaluate((targetId) => {
-                const idNodes = Array.from(document.querySelectorAll('span'));
-                // 匹配 ID 节点
-                const targetNode = idNodes.find(n => 
+                const nodes = Array.from(document.querySelectorAll('span'));
+                const targetNode = nodes.find(n => 
                     n.innerText.toLowerCase().includes(targetId.toLowerCase()) && 
                     n.innerText.includes('抖音号')
                 );
 
                 if (targetNode) {
                     const card = targetNode.closest('.search-result-card') || targetNode.parentElement.parentElement.parentElement;
-                    // 找到第一个类名符合或层级符合的 p 标签（通常是昵称）
                     const nickEl = card.querySelector('p.ZMZLqKYm') || card.querySelector('p');
                     return nickEl ? nickEl.innerText.trim() : null;
                 }
@@ -80,7 +100,6 @@ const fs = require('fs');
                 console.log(`✅ 匹配成功: ${douyin_id} -> ${nickname}`);
                 results.push(`${douyin_id}-${nickname}`);
             } else {
-                console.log(`⚠️ 未能在页面匹配: ${douyin_id}`);
                 results.push(`${douyin_id}-未匹配`);
             }
         } catch (err) {
@@ -92,8 +111,8 @@ const fs = require('fs');
         await new Promise(r => setTimeout(r, 2000));
     }
 
-    // 写入文件
+    // 写入临时文件供程序 B 下载
     fs.writeFileSync('user_id.txt', results.join('\n'), 'utf-8');
     await browser.close();
-    console.log('\n🚀 任务结束，已生成 user_id.txt');
+    console.log('\n🚀 程序 A 运行结束，已生成产物');
 })();
