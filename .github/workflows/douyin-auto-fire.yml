@@ -2,7 +2,7 @@ name: 抖音续火花自动任务
 
 on:
   schedule:
-    - cron: '00 16 * * *' # 每天北京时间凌晨 0 点运行
+    - cron: '10 16 * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,29 +17,24 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-
-      # 【关键步】下载程序 A 运行后的产物文件
-      - name: 下载用户列表产物
-        uses: actions/download-artifact@v4
-        with:
-          name: douyin-id-results
-          # 注意：GitHub 默认解压到当前根目录，所以文件路径就是 user_id.txt
-
+      
       - name: 安装依赖
         run: npm install axios playwright
       
       - name: 安装 Playwright 浏览器
         run: npx playwright install chromium
       
-      - name: 运行续火花脚本
+      - name: 运行自动发送脚本
         env:
           DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
+          TARGET_USERS: ${{ secrets.TARGET_USERS }}
         run: node index.js
       
-      - name: 上传错误截图
+      - name: 上传错误截图 (失效时必看)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
-          path: "*.png"
+          path: "*.png" # index.js 报错时生成的截图
+
           retention-days: 3
