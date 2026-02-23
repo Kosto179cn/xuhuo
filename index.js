@@ -3,17 +3,15 @@ const axios = require('axios');
 
 const CONFIG = {
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
-  // 逻辑：如果有单人标记就只发给单人，否则读取环境变量列表
+  // 逻辑：如果环境变量 ONLY_FOR_KOSTO 有值（即 push 触发），则只发给 Kosto
   targetUsers: process.env.ONLY_FOR_KOSTO 
     ? 'Kosto' 
     : (process.env.TARGET_USERS || ''),
   messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
-  gotoTimeout: 60000
 };
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
-// 获取天气和一言 (保持你原来的代码逻辑)
 async function getHitokoto() {
   try {
     const { data: hData } = await axios.get('https://v1.hitokoto.cn/');
@@ -27,12 +25,28 @@ async function getHitokoto() {
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
-  const cookies = JSON.parse(process.env.DOUYIN_COOKIES || '[]');
+
+  // --- Cookie 清洗逻辑，解决 sameSite 报错 ---
+  let cookies = [];
+  try {
+    cookies = JSON.parse(process.env.DOUYIN_COOKIES || '[]');
+    cookies = cookies.map(cookie => {
+      // 如果 sameSite 不是标准值，直接删掉该属性，由浏览器自动处理
+      const validSameSite = ['Strict', 'Lax', 'None'];
+      if (!validSameSite.includes(cookie.sameSite)) {
+        delete cookie.sameSite;
+      }
+      return cookie;
+    });
+  } catch (e) {
+    log('error', 'Cookie 解析失败，请检查 Secret 格式');
+  }
+
   await context.addCookies(cookies);
   const page = await context.newPage();
 
   try {
-    log('info', `准备任务。目标模式: ${process.env.ONLY_FOR_KOSTO ? '代码更新(仅Kosto)' : '定时/手动(全员)'}`);
+    log('info', `任务启动。当前模式: ${process.env.ONLY_FOR_KOSTO ? '代码更新(仅限Kosto)' : '常规全员'}`);
     await page.goto(CONFIG.url, { waitUntil: 'networkidle' });
     await page.waitForTimeout(5000);
 
@@ -44,11 +58,9 @@ async function main() {
       if (pendingUsers.length === 0) break;
 
       const visibleNames = await page.$$eval(nameSelector, els => els.map(el => el.innerText.trim()));
-      let foundAny = false;
-
+      
       for (const user of [...pendingUsers]) {
         if (visibleNames.includes(user)) {
-          foundAny = true;
           log('info', `🎯 找到目标: ${user}`);
           await page.locator(nameSelector).filter({ hasText: user }).last().click();
           await page.waitForTimeout(2000);
@@ -65,23 +77,18 @@ async function main() {
         }
       }
 
-      // 如果没找齐，执行【小幅可视化滑动】
+      // 找不到用户时，执行“对位”的可视化小幅滑动
       if (pendingUsers.length > 0) {
-        log('info', `未找齐，执行可视化下划...`);
+        log('info', `未找齐目标，正在执行可视化微划...`);
         const box = await page.locator(gridSelector).boundingBox();
         if (box) {
           await page.mouse.move(box.x + 50, box.y + 100);
-          // 这里的循环就是你要求的“不要太大”的小幅效果
+          // 每次只滚 150px，分 3 次滚动，确保 React 识别
           for (let step = 0; step < 3; step++) {
-            await page.mouse.wheel(0, 150); // 每次轻滚 150 像素
+            await page.mouse.wheel(0, 150); 
             await page.waitForTimeout(200); 
           }
         }
-        // 触发一次 scroll 事件确保网页识别
-        await page.evaluate((s) => {
-          const el = document.querySelector(s);
-          if (el) el.dispatchEvent(new Event('scroll', { bubbles: true }));
-        }, gridSelector);
         await page.waitForTimeout(1500);
       }
     }
