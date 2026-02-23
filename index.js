@@ -96,7 +96,9 @@ async function getHitokoto() {
       const totalDays = Math.ceil(totalMs / (1000 * 60 * 60 * 24)); 
 
       if (dayInfo.is_holiday && dayInfo.legal_holiday_name === name) {
-        if (d <= 0) {
+        if (ms <= 0) {
+          lines.push(`${name}（已结束）`);
+        } else if (d === 0) {
           lines.push(`${name}（假期还剩 ${h}小时）`);
         } else {
           lines.push(`${name}（假期还剩 ${d}天${h}小时）`);
