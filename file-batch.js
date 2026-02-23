@@ -9,11 +9,14 @@ async function getIdsFromGitee() {
     const path = "douyinh.txt";
     const apiUrl = `https://gitee.com/api/v5/repos/${owner}/${repo}/contents/${path}?access_token=${token}`;
     try {
+        console.log(`[INFO] 正在从 Gitee 获取私密名单...`);
         const response = await axios.get(apiUrl);
         const content = Buffer.from(response.data.content, 'base64').toString('utf8');
-        return content.split('\n').map(l => l.trim()).filter(l => l);
+        const ids = content.split('\n').map(l => l.trim()).filter(l => l);
+        console.log(`[SUCCESS] 成功加载 ${ids.length} 个抖音号`);
+        return ids;
     } catch (error) {
-        console.error(`Gitee 加载失败: ${error.message}`);
+        console.error(`[ERROR] Gitee 加载失败: ${error.message}`);
         return [];
     }
 }
@@ -46,35 +49,31 @@ async function getIdsFromGitee() {
             console.log(`⏳ 等待深度渲染 (15s)...`);
             await new Promise(r => setTimeout(r, 15000));
 
-            // 【暴力扫描：不依赖任何类名】
             const nickname = await page.evaluate((targetId) => {
-                // 获取所有带文本的元素
-                const elements = Array.from(document.querySelectorAll('a, div, li, p, span'));
-                // 找到包含 "抖音号: ID" 的那个元素
-                const targetNode = elements.find(el => {
-                    const txt = el.innerText || "";
-                    return txt.includes('抖音号:') && txt.toLowerCase().includes(targetId.toLowerCase());
-                });
+                // 找到所有包含 ID 的 span
+                const allSpans = Array.from(document.querySelectorAll('span'));
+                const idNode = allSpans.find(el => el.innerText.trim() === targetId);
 
-                if (targetNode) {
-                    // 向上找最近的一个“块级”容器（通常是卡片或列表项）
-                    let container = targetNode;
-                    for (let i = 0; i < 6; i++) {
-                        if (container.innerText.length > targetId.length + 10) break;
+                if (idNode) {
+                    // 向上找 <a> 标签或者 search-result-card 容器
+                    let container = idNode;
+                    for (let i = 0; i < 8; i++) {
+                        if (container.tagName === 'A' || container.className.includes('card')) break;
                         if (container.parentElement) container = container.parentElement;
                     }
-                    // 拆分行，拿第一行非空文字
+                    // 获取容器内所有文本，取第一行通常就是昵称
                     const lines = container.innerText.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+                    // 过滤掉“相互关注”、“关注”等按钮文字
                     return lines[0];
                 }
                 return null;
             }, douyin_id);
 
-            if (nickname && nickname !== '抖音号:') {
+            if (nickname) {
                 console.log(`✅ 成功: ${douyin_id} -> ${nickname}`);
                 results.push(`${douyin_id}-${nickname}`);
             } else {
-                console.log(`⚠️ 抓取失败，正在截图留证...`);
+                console.log(`⚠️ 抓取失败，正在截图...`);
                 await page.screenshot({ path: `fail-${douyin_id}.png`, fullPage: true });
                 results.push(`${douyin_id}-未匹配`);
             }
