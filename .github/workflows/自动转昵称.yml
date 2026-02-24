@@ -1,0 +1,69 @@
+name: 🔗 Gitee同步 - 抖音ID转昵称
+
+# 三种触发方式：
+# 1. 手动触发 (workflow_dispatch)
+# 2. 定时任务 (例如每小时检查一次Gitee是否有更新)
+# 3. 当Gitee文件更新时触发 (需要Gitee Webhook，此处未配置，以定时为主)
+on:
+  schedule:
+    # 每天早上 8点 和 晚上 8点 检查更新 (北京时间需+8小时)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # 允许手动点击运行
+    inputs:
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'sync'
+        type: choice
+        options:
+          - sync
+          - debug
+
+jobs:
+  sync-users:
+    runs-on: ubuntu-latest
+    name: 同步Gitee抖音号
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📦 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: ⚙️ 安装依赖
+        run: |
+          npm install axios playwright
+          npx playwright install chromium
+
+      - name: 🔍 执行同步脚本
+        env:
+          # 这里需要两个密钥：一个给Gitee，一个给抖音
+          GITEE_TOKEN: $
+          DOUYIN_COOKIES: $
+        run: |
+          # 启用核心转储或调试日志（如果需要）
+          # 如果脚本报错，可以在这里加 DEBUG=* 来查看详细日志
+          node sync_users.js
+
+      - name: 📤 推送更新 (如果users.txt有变化)
+        id: git_commit
+        run: |
+          # 检查文件是否有变化
+          if git diff --exit-code users.txt > /dev/null; then
+            echo "NO_CHANGES=false" >> $GITHUB_ENV
+          else
+            echo "NO_CHANGES=true"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add users.txt
+            git commit -m "🤖 自动更新 users.txt $(date)"
+            git push
+          fi
+
+      - name: 📝 发送通知 (可选)
+        if: env.NO_CHANGES == 'true'
+        run: |
+          echo " 己检测到Gitee列表更新并同步了 users.txt"
+        # 这里可以接入 Server酱 或 Bark 等推送服务，告知你列表已更新
