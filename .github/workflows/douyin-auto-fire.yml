@@ -32,7 +32,7 @@ jobs:
           DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
           TARGET_USERS: ${{ secrets.TARGET_USERS }}
           # ⭐ 核心逻辑：如果是 push 触发，设置单人模式变量
-          ONLY_FOR_KOSTO: ${{ github.event_name == 'push' && 'Sunx0617' || '' }}
+          ONLY_FOR_KOSTO: ${{ github.event_name == 'push' && 'Kosto' || '' }}
         run: node index.js
       
       - name: 上传错误截图
