@@ -1,28 +1,27 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 // === 配置区 ===
 const CONFIG = {
   // 抖音创作者后台私信页面URL
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
   
-  // ⭐ 修改：从环境变量 DYID 读取抖音号列表 (一行一个)
-  // 如果没有设置环境变量，默认为空数组
+  // ⭐ 从环境变量 DYID 读取抖音号列表 (一行一个)
   targetDyIds: (process.env.DYID || '').split('\n').map(id => id.trim()).filter(id => id),
   
-  // ⭐ 新增：是否启用抖音号验证模式
-  // 设置为 'true' 时，只会给 DYID 列表里匹配成功的用户发消息
-  // 设置为 'false' 时，仅记录抖音号，不拦截发送（适合测试期）
-  enableDyIdCheck: process.env.ENABLE_DYID_CHECK === 'true',
+  // ⭐ 新增：单人模式：如果设置了环境变量，则只发送给该用户 (优先级最高)
+  onlyFor: process.env.ONLY_FOR_KOSTO || '',
 
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
   messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
   gotoTimeout: 60000,
   
-  // ⭐ 单人模式：如果设置了环境变量，则只发送给该用户 (优先级最高)
-  onlyFor: process.env.ONLY_FOR_KOSTO || ''
+  // Gitee 配置
+  giteeRepoOwner: 'Kosto179',
+  giteeRepoName: 'kosto-battle-clicker-new',
+  giteeFilePath: 'douyinh.txt',
+  giteeBranch: 'master',
+  giteeToken: process.env.GITEE_TOKEN,
 };
 
 const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
@@ -131,7 +130,7 @@ async function getHitokoto() {
       .slice(0, 5)
       .map(item => `${item.index}. ${item.title} 🔥${item.hot_value}`)
       .join('\n');
-    // 最终文案（去掉了标题“每日续火”）
+    // 最终文案
     let msg = `今日${city}：${weather}，气温${temp}℃，${wind}${windPower}，${weekday}，农历${lunar}`;
     
     msg += festivalText;
@@ -139,7 +138,6 @@ async function getHitokoto() {
     msg += `\n    \n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n${yiyan}\n\n接自动抖音续火花5米-30米/月 有需要可直接在此处聊天发信息`;
     return msg;
   } catch (e) {
-    // 如果出错，返回简单文本（去掉了标题）
     return '保持热爱，奔赴山海。';
   }
 }
@@ -168,7 +166,7 @@ async function typeRealMessage(page, selector, text) {
   await page.keyboard.press('Enter'); // 发送
 }
 
-// ============ 抖音ID获取核心函数 (已整合) ============
+// ============ 抖音ID获取核心函数 ============
 async function getDouyinId(page) {
     try {
         const dyId = await page.evaluate(async () => {
@@ -263,53 +261,166 @@ function fixCookies(rawCookies) {
   });
 }
 
-async function scrollAndFindUser(page, username) {
-  log('info', `🔍 正在寻找用户: ${username}`);
-  for (let i = 0; i < 30; i++) {
-    const found = await page.evaluate((name) => {
-      const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
-      const target = spans.find(el => el.textContent.trim() === name);
-      if (target) {
-        target.scrollIntoView();
-        target.click(); 
-        return true;
-      }
-      return false;
-    }, username);
-    if (found) return true;
-    await page.evaluate(() => {
-      const grid = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
-      if (grid) grid.scrollTop += 600;
-      else window.scrollBy(0, 600);
-    });
-    await page.waitForTimeout(1500);
+// 上传文件到 Gitee
+async function uploadToGitee(data) {
+  if (!CONFIG.giteeToken) {
+    log('error', '❌ GITEE_TOKEN 未设置，无法上传数据');
+    return;
   }
-  return false;
+
+  try {
+    const apiUrl = `https://gitee.com/api/v5/repos/${CONFIG.giteeRepoOwner}/${CONFIG.giteeRepoName}/contents/${CONFIG.giteeFilePath}`;
+    
+    // 获取当前文件信息（用于获取 sha）
+    const fileResponse = await axios.get(apiUrl, {
+      params: {
+        ref: CONFIG.giteeBranch
+      },
+      headers: {
+        Authorization: `Bearer ${CONFIG.giteeToken}`
+      }
+    });
+
+    const currentSha = fileResponse.data.sha;
+    const content = Buffer.from(JSON.stringify(data, null, 2)).toString('base64');
+
+    const updateResponse = await axios.put(apiUrl, {
+      access_token: CONFIG.giteeToken,
+      content: content,
+      sha: currentSha,
+      message: `Update douyinh.txt - ${new Date().toISOString()}`,
+      branch: CONFIG.giteeBranch
+    });
+
+    log('success', '✅ 用户数据已成功上传到 Gitee');
+  } catch (e) {
+    if (e.response) {
+      log('error', `❌ Gitee API 错误: ${e.response.status} - ${e.response.data.message || e.response.data}`);
+    } else {
+      log('error', `❌ 上传到 Gitee 时发生错误: ${e.message}`);
+    }
+  }
+}
+
+async function scanAllUsers(page) {
+  log('info', '🔍 开始扫描所有用户...');
+  
+  let allUsers = [];
+  let maxScrollAttempts = 100; 
+  let scrollAttempt = 0;
+  let previousUserCount = 0;
+  let noChangeCount = 0;
+
+  while (scrollAttempt < maxScrollAttempts && noChangeCount < 5) {
+    scrollAttempt++;
+    log('info', `🔄 第 ${scrollAttempt} 次扫描...`);
+    
+    // 获取当前页面可见的所有用户元素
+    const visibleUsers = await page.evaluate(() => {
+        const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
+        return spans.map(el => ({
+            name: el.textContent.trim(),
+            elementIndex: spans.indexOf(el)
+        })).filter(u => u.name);
+    });
+
+    if (visibleUsers.length === 0) {
+        log('warn', '⚠️ 当前页面未加载任何用户，尝试滚动...');
+    }
+
+    // 检查是否有新用户被加载
+    if (visibleUsers.length <= previousUserCount) {
+      noChangeCount++;
+    } else {
+      noChangeCount = 0; // 有新增用户，重置计数器
+    }
+    previousUserCount = visibleUsers.length;
+
+    // 遍历当前可见用户，获取抖音号
+    for (let i = 0; i < visibleUsers.length; i++) {
+      const userDisplayname = visibleUsers[i].name;
+      
+      // 点击进入聊天
+      await page.evaluate((index) => {
+          const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
+          if(spans[index]) {
+              spans[index].scrollIntoView();
+              spans[index].click();
+          }
+      }, i);
+      
+      await page.waitForTimeout(2000);
+
+      // 获取抖音号
+      const dyId = await getDouyinId(page);
+      
+      if (dyId) {
+          log('info', `🆔 用户 [${userDisplayname}] 的抖音号: ${dyId}`);
+          
+          // 检查是否在目标列表中
+          const isActive = CONFIG.targetDyIds.includes(dyId) ? 1 : 0;
+          
+          // 检查是否已存在，避免重复添加
+          const existingUser = allUsers.find(user => user.id === dyId);
+          if (!existingUser) {
+            allUsers.push({
+              id: dyId,
+              name: userDisplayname,
+              status: isActive
+            });
+          }
+      } else {
+          log('warn', `⚠️ 未能获取用户 [${userDisplayname}] 的抖音号`);
+      }
+      
+      // 返回列表（可以通过再次点击其他用户或刷新来实现，这里简单等待）
+      await page.waitForTimeout(1000);
+    }
+
+    // 滚动加载更多
+    log('info', '⬇️ 向下滚动加载更多...');
+    await page.evaluate(async () => {
+       const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+       if (!scrollContainer) {
+         window.scrollBy(0, 800);
+         return;
+       }
+       for (let j = 0; j < 8; j++) {
+         scrollContainer.dispatchEvent(new WheelEvent('wheel', {
+           deltaY: 100,
+           bubbles: true,
+           cancelable: true,
+           composed: true
+         }));
+         scrollContainer.scrollTop += 100;
+         await new Promise(r => setTimeout(r, 50));
+       }
+     });
+     await page.waitForTimeout(2000);
+  }
+
+  log('info', `✅ 扫描完成，共获取到 ${allUsers.length} 个用户`);
+  return allUsers;
 }
 
 async function main() {
   // 1. 初始化
-  let users;
+  let targetDyIds = new Set(CONFIG.targetDyIds);
   
-  // ⭐ 核心逻辑：如果是单人模式，直接忽略其他，强制使用指定用户
+  // 如果没有配置 DYID，直接退出
+  if (targetDyIds.size === 0) {
+    log('error', '❌ 未在仓库机密 DYID 中找到任何抖音号，请检查 GitHub Secrets 设置');
+    log('error', '📌 请确保已添加 Secret: DYID (一行一个抖音号)');
+    process.exit(1);
+  }
+  
+  // ⭐ 单人模式：如果设置了 ONLY_FOR_KOSTO，则只发送给该用户
   if (CONFIG.onlyFor) {
     const onlyUser = CONFIG.onlyFor.trim();
-    users = [onlyUser];
+    targetDyIds = new Set([onlyUser]);
     log('info', `🎯 单人模式已启用，仅发送给: ${onlyUser}`);
   } else {
-    // ⭐ 修改：这里不再读取 users.txt，而是直接使用 DYID 列表作为目标
-    // 注意：这里的 users 变量现在存储的是 "期望匹配的抖音号" 或者 "昵称"
-    // 如果你的 DYID 里存的是抖音号，而页面上显示的是昵称，这里需要对应调整
-    // 目前逻辑：我们遍历页面上的所有用户，尝试获取他们的抖音号，然后判断抖音号是否在 CONFIG.targetDyIds 中
-    
-    // 为了兼容旧逻辑，如果没开抖音号验证，我们可以暂时留空或者给个提示
-    if (CONFIG.enableDyIdCheck && CONFIG.targetDyIds.length === 0) {
-        log('error', '❌ 已启用抖音号验证但未找到 DYID 环境变量，请检查 Secrets 设置');
-        process.exit(1);
-    }
-    
-    users = CONFIG.targetDyIds; // 这里暂时用抖音号列表占位，实际逻辑在下面动态判断
-    log('info', `📋 已加载 ${users.length} 个目标抖音号 (验证模式: ${CONFIG.enableDyIdCheck})`);
+    log('info', `📋 已加载 ${targetDyIds.size} 个目标抖音号`);
   }
 
   let rawCookies;
@@ -321,10 +432,9 @@ async function main() {
   }
   const cleanCookies = fixCookies(rawCookies);
   
-  // ⭐ 适配 GitHub Actions: 如果是 CI 环境，可能需要特定的启动参数
   const isCI = process.env.CI === 'true';
   const browser = await chromium.launch({ 
-      headless: true, // GitHub Actions 必须 headless
+      headless: true,
       args: isCI ? ['--no-sandbox', '--disable-setuid-sandbox'] : []
   });
   
@@ -340,7 +450,7 @@ async function main() {
     log('info', '🚀 正在进入抖音页面...');
     await page.goto(CONFIG.url, { waitUntil: 'domcontentloaded', timeout: CONFIG.gotoTimeout });
     
-    // ⭐ 修改：等待时间延长至 60 秒，满足你的需求
+    // ⭐ 等待时间延长至 60 秒
     log('info', '⏳ 等待页面完全加载及稳定 (60秒)...');
     await page.waitForTimeout(60000);
 
@@ -349,154 +459,64 @@ async function main() {
       return;
     }
 
-    // 💡 获取一次通用内容
+    // 2. 扫描所有用户
+    const allUsers = await scanAllUsers(page);
+    
+    // 3. 上传用户数据到 Gitee
+    await uploadToGitee(allUsers);
+    
+    // 4. 统计目标用户发送情况
     const apiContent = await getHitokoto();
     const finalMsg = CONFIG.messageTemplate.replace('[API]', apiContent);
     const inputSelector = 'div[contenteditable="true"], .chat-input-dccKiL, textarea';
 
-    // 2. 核心逻辑：逐个处理用户
-    // 现在的逻辑变为：滚动列表 -> 获取每个可见用户的抖音号 -> 判断是否在白名单 -> 发送
-    
     let totalSent = 0;
-    let processedCount = 0;
-    
-    // 标记哪些抖音号已经发送过，避免重复
-    let sentDyIds = new Set();
+    let pendingDyIds = new Set(targetDyIds); // 用于追踪尚未发送的目标
 
-    // 只要还有未发送的目标抖音号，就继续循环
-    // 如果 enableDyIdCheck 为 false，则逻辑退化为发送给所有能获取到抖音号的人（或者你可以改回原来的昵称匹配）
-    let targetSet = new Set(CONFIG.targetDyIds);
-    
-    // 最大滚动次数限制，防止死循环
-    let maxScrollAttempts = 50; 
-    let scrollAttempt = 0;
+    // 重新遍历所有用户，只给目标用户发消息
+    for (const user of allUsers) {
+      if (user.status === 1) { // 只处理目标用户
+        // 找到该用户在列表中的位置并点击
+        const userIndex = await page.evaluate((userName) => {
+          const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
+          return spans.findIndex(el => el.textContent.trim() === userName);
+        }, user.name);
 
-    while (scrollAttempt < maxScrollAttempts) {
-        scrollAttempt++;
-        log('info', `🔄 第 ${scrollAttempt} 轮扫描...`);
-        
-        // 获取当前页面可见的所有用户元素
-        const visibleUsers = await page.evaluate(() => {
+        if (userIndex !== -1) {
+          await page.evaluate((index) => {
             const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
-            return spans.map(el => ({
-                name: el.textContent.trim(),
-                elementIndex: spans.indexOf(el) // 简单标记
-            })).filter(u => u.name);
-        });
-
-        if (visibleUsers.length === 0) {
-            log('warn', '⚠️ 当前页面未加载任何用户，尝试滚动...');
-        }
-
-        let foundInThisRound = false;
-
-        // 遍历当前可见用户
-        for (let i = 0; i < visibleUsers.length; i++) {
-            const userDisplayname = visibleUsers[i].name;
-            
-            // 点击进入聊天
-            await page.evaluate((index) => {
-                const spans = Array.from(document.querySelectorAll('span[class*="name"]'));
-                if(spans[index]) {
-                    spans[index].scrollIntoView();
-                    spans[index].click();
-                }
-            }, i);
-            
-            await page.waitForTimeout(2000); // 等待进入聊天
-
-            // ⭐ 核心：获取抖音号
-            const dyId = await getDouyinId(page);
-            
-            if (dyId) {
-                log('info', `🆔 用户 [${userDisplayname}] 的抖音号: ${dyId}`);
-                
-                // 判断逻辑
-                let shouldSend = false;
-
-                if (CONFIG.enableDyIdCheck) {
-                    // 验证模式：只有在白名单里才发
-                    if (targetSet.has(dyId) && !sentDyIds.has(dyId)) {
-                        shouldSend = true;
-                        log('success', `✅ 匹配成功，准备发送给: ${dyId}`);
-                    } else if (sentDyIds.has(dyId)) {
-                        log('skip', `⏭️ 抖音号 ${dyId} 已发送过，跳过`);
-                    } else {
-                        log('skip', `⏭️ 抖音号 ${dyId} 不在白名单中，跳过`);
-                    }
-                } else {
-                    // 非验证模式：为了测试，我们可以选择发送给所有人，或者只记录
-                    // 这里设定为：如果不验证，且没发过，就发（方便你测试获取功能是否正常）
-                    if (!sentDyIds.has(dyId)) {
-                        shouldSend = true;
-                        log('warn', `⚠️ 未开启严格验证，尝试发送给: ${dyId}`);
-                    }
-                }
-
-                if (shouldSend) {
-                    try {
-                        await page.waitForSelector(inputSelector, { timeout: 8000 });
-                        await typeRealMessage(page, inputSelector, finalMsg);
-                        log('success', `✨ 已发给: ${dyId} (${userDisplayname})`);
-                        totalSent++;
-                        sentDyIds.add(dyId);
-                        
-                        // 如果开启了验证，且这个号发完了，可以从目标集合移除（可选优化）
-                        // targetSet.delete(dyId); 
-                        
-                        await page.waitForTimeout(3000); // 发送间隔
-                        foundInThisRound = true;
-                    } catch (e) {
-                        log('error', `❌ ${dyId} 发送失败: ${e.message}`);
-                    }
-                }
-            } else {
-                log('warn', `⚠️ 未能获取用户 [${userDisplayname}] 的抖音号，跳过`);
+            if(spans[index]) {
+              spans[index].scrollIntoView();
+              spans[index].click();
             }
-            
-            // 返回私信列表页 (通常需要点击左上角返回或刷新，这里简单处理：重新加载页面或点击返回按钮)
-            // 抖音网页版点击用户后，通常左侧列表还在，直接再次点击列表其他人即可
-            // 但如果状态卡住，可能需要刷新。这里假设直接循环点击列表即可。
-            // 为了防止状态异常，每处理几个用户刷新一次页面是个好习惯，但会慢。
-            // 暂时保持连续操作，如果发现问题再加大刷新频率。
-        }
+          }, userIndex);
+          
+          await page.waitForTimeout(2000);
 
-        // 如果这一轮没找到任何可发送的新用户，尝试滚动加载更多
-        if (!foundInThisRound) {
-             log('info', '⬇️ 本轮未发现新目标，向下滚动加载更多...');
-             await page.evaluate(async () => {
-                const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
-                if (!scrollContainer) {
-                  window.scrollBy(0, 800);
-                  return;
-                }
-                // 模拟物理滚轮
-                for (let j = 0; j < 8; j++) {
-                  scrollContainer.dispatchEvent(new WheelEvent('wheel', {
-                    deltaY: 100,
-                    bubbles: true,
-                    cancelable: true,
-                    composed: true
-                  }));
-                  scrollContainer.scrollTop += 100;
-                  await new Promise(r => setTimeout(r, 50));
-                }
-              });
-              await page.waitForTimeout(2000); // 等待加载
-        } else {
-            // 如果这轮找到了人，重置一下滚动尝试计数？或者继续
-            // 这里逻辑比较简单：一直滚直到达到最大次数
+          try {
+            await page.waitForSelector(inputSelector, { timeout: 8000 });
+            await typeRealMessage(page, inputSelector, finalMsg);
+            log('success', `✨ 已发给: ${user.id} (${user.name})`);
+            
+            totalSent++;
+            pendingDyIds.delete(user.id);
+            
+            await page.waitForTimeout(3000);
+          } catch (e) {
+            log('error', `❌ ${user.id} 发送失败: ${e.message}`);
+          }
         }
-        
-        // 检查是否所有目标都已完成
-        if (CONFIG.enableDyIdCheck && sentDyIds.size >= CONFIG.targetDyIds.length) {
-            log('success', '🎉 所有目标抖音号均已发送完成！');
-            break;
-        }
+      }
     }
 
-    log('info', `🏁 任务结束，成功发送 ${totalSent} 人`);
+    if (pendingDyIds.size === 0) {
+        log('success', '🎉 所有目标抖音号均已发送完成！');
+    } else {
+        log('warn', `⚠️ 任务结束，仍有 ${pendingDyIds.size} 个目标未发送:`, Array.from(pendingDyIds).join(', '));
+    }
     
+    log('info', `🏁 最终统计：成功发送 ${totalSent} 人`);
+
   } catch (e) {
     log('error', `致命错误: ${e.message}`);
     console.error(e.stack);
