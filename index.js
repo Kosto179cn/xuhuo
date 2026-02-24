@@ -6,8 +6,8 @@ const CONFIG = {
   // 抖音创作者后台私信页面URL
   url: 'https://creator.douyin.com/creator-micro/data/following/chat',
   
-  // ⭐ 从环境变量 DYID 读取抖音号列表 (一行一个)
-  targetDyIds: (process.env.DYID || '').split('\n').map(id => id.trim()).filter(id => id),
+  // ⭐ 从环境变量 TARGET_USERS 读取抖音号列表 (一行一个)，与 Actions 工作流文件中的变量名对应
+  targetDyIds: (process.env.TARGET_USERS || '').split('\n').map(id => id.trim()).filter(id => id),
   
   // ⭐ 新增：单人模式：如果设置了环境变量，则只发送给该用户 (优先级最高)
   onlyFor: process.env.ONLY_FOR_KOSTO || '',
@@ -407,10 +407,10 @@ async function main() {
   // 1. 初始化
   let targetDyIds = new Set(CONFIG.targetDyIds);
   
-  // 如果没有配置 DYID，直接退出
+  // 如果没有配置 TARGET_USERS，直接退出
   if (targetDyIds.size === 0) {
-    log('error', '❌ 未在仓库机密 DYID 中找到任何抖音号，请检查 GitHub Secrets 设置');
-    log('error', '📌 请确保已添加 Secret: DYID (一行一个抖音号)');
+    log('error', '❌ 未在环境变量 TARGET_USERS 中找到任何抖音号，请检查 Actions 工作流配置');
+    log('error', '📌 确保工作流文件中 env.TARGET_USERS 映射了仓库机密 TARGET_USERS');
     process.exit(1);
   }
   
