@@ -9,12 +9,13 @@ const CONFIG = {
   LOCAL_USERS_FILE: 'users.txt',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
-  MAX_SCROLL_ATTEMPTS: 100, // 最大滚动轮次
-  SCROLL_TOTAL_STEP: 800,   // 单次滚动总距离（和index.js一致）
-  SCROLL_STEP: 100          // 小步滚动距离（和index.js一致）
+  MAX_SCROLL_ATTEMPTS: 150, // 加大最大轮次，确保扫完长列表
+  SCROLL_TOTAL_STEP: 600,   // 减小步长，避免跳过用户
+  SCROLL_STEP: 100,
+  MAX_NO_NEW_USER_COUNT: 8   // 放宽终止条件，8轮无新用户才停止
 };
 
-// 日志函数（兼容CI环境）
+// 日志函数
 const log = (level, msg, ...args) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`, ...args);
 
 // 主函数
@@ -22,7 +23,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（融合index.js可用滚动+全量标记遍历）');
+    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版）');
 
     // ========== 1. 环境变量校验 ==========
     const giteeToken = process.env.GITEE_TOKEN?.trim();
@@ -54,7 +55,6 @@ async function runSync() {
       process.exit(1);
     });
 
-    // 解析Base64内容，过滤空行、注释
     const rawFileContent = Buffer.from(giteeRes.data.content, 'base64').toString();
     const TARGET_DOUYIN_IDS = rawFileContent.split('\n')
       .map(id => id.trim())
@@ -66,7 +66,7 @@ async function runSync() {
     }
     log('success', `✅ 成功拉取到${TARGET_DOUYIN_IDS.length}个目标抖音号`);
 
-    // ========== 3. 启动浏览器，注入Cookie，反爬配置 ==========
+    // ========== 3. 启动浏览器，注入Cookie ==========
     log('info', '🌐 正在启动无头浏览器');
     browser = await chromium.launch({
       headless: true,
@@ -89,7 +89,6 @@ async function runSync() {
       javaScriptEnabled: true
     });
 
-    // 注入反爬脚本，隐藏自动化特征
     await context.addInitScript(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -97,7 +96,6 @@ async function runSync() {
       window.chrome = { runtime: {} };
     });
 
-    // 清理并注入Cookie（复用index.js的fixCookies逻辑）
     let parsedCookies;
     try {
       parsedCookies = JSON.parse(douyinCookies);
@@ -105,7 +103,7 @@ async function runSync() {
       log('error', '❌ DOUYIN_COOKIES格式错误，必须是标准JSON字符串');
       process.exit(1);
     }
-    // index.js 原版Cookie修复逻辑
+
     const fixCookies = (rawCookies) => {
       return rawCookies.map(cookie => {
         if (cookie.sameSite) {
@@ -127,49 +125,41 @@ async function runSync() {
     await context.addCookies(cleanCookies);
 
     page = await context.newPage();
-    // 只监听致命页面错误，过滤无关的CSP/CORS警告
     page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
-    log('success', '✅ 浏览器启动完成，Cookie已注入，反爬配置生效');
+    log('success', '✅ 浏览器启动完成，Cookie已注入');
 
-    // ========== 4. 页面加载逻辑（修复超时，和index.js一致） ==========
+    // ========== 4. 页面加载 ==========
     log('info', '🌐 正在进入抖音创作者中心私信页面，等待页面加载...');
     await page.goto(CONFIG.CREATOR_CHAT_URL, {
       waitUntil: 'domcontentloaded',
       timeout: CONFIG.GOTO_TIMEOUT
     });
 
-    // 校验登录态（和index.js一致，等待10秒基础渲染）
     await page.waitForTimeout(10000);
     const currentUrl = page.url();
     if (currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl.includes('verify')) {
-      log('error', '❌ Cookie已失效/触发人机验证，请重新获取抖音创作者中心Cookie');
+      log('error', '❌ Cookie已失效/触发人机验证，请重新获取Cookie');
       process.exit(1);
     }
 
-    // 等待核心列表元素渲染，确保页面加载完成
     await page.waitForSelector('span[class*="name"], div[class*="name"], [class*="user-item"]', {
       timeout: 60000,
       state: 'attached'
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
 
-    // ================= 【核心修复：合并参数，解决evaluate参数超限问题】 =================
+    // ================= 【核心修复：全量滚动+全量匹配逻辑】 =================
     const scanResult = await page.evaluate(async (params) => {
-      // 解构出两个参数，内部逻辑完全不变
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
-      // 结果存储
       const results = [];
-      // 双重防重复标记：内存Set + DOM自定义属性（和原版一致）
       const processedNicknames = new Set();
       const PROCESSED_ATTR = 'data-user-processed';
       let remainingTargets = [...TARGET_DOUYIN_IDS];
-      let noNewUserCount = 0; // 连续无新用户计数，判断是否到底
+      let noNewUserCount = 0;
 
-      // 工具函数：sleep（和原版一致）
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-      // 工具函数：模拟鼠标事件（和原版一致）
       function triggerMouseEvent(element, eventType) {
         if (!element) return;
         const rect = element.getBoundingClientRect();
@@ -181,7 +171,6 @@ async function runSync() {
         element.dispatchEvent(event);
       }
 
-      // 工具函数：查找“查看Ta的主页”（和原版一致）
       function findHoverTarget() {
         const elements = document.querySelectorAll('span, div');
         for (const el of elements) {
@@ -192,73 +181,116 @@ async function runSync() {
         return null;
       }
 
-      // ✅ 核心移植：index.js 原版滚动逻辑（一字未改，仅封装成函数）
-      async function scrollDouyinList() {
-        const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
-        if (!scrollContainer) {
-          window.scrollBy(0, CONFIG.SCROLL_TOTAL_STEP);
-          return;
+      // ✅ 【核心修复1：精准查找滚动容器，确保滚对地方】
+      function findScrollContainer() {
+        // 优先级1：React虚拟列表标准容器
+        let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+        if (container) return container;
+
+        // 优先级2：遍历找可滚动的私信列表容器
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+          const style = window.getComputedStyle(div);
+          const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+          const isTall = div.clientHeight > window.innerHeight * 0.6;
+          const hasUserItems = div.querySelector('[class*="name"], [class*="user"], [class*="message"]');
+          const isLongList = div.scrollHeight > div.clientHeight + 100;
+          if (isScrollable && isTall && hasUserItems && isLongList) {
+            return div;
+          }
         }
-        // 分小步滚动：模拟物理滚轮+强制scrollTop（和index.js完全一致）
+
+        // 兜底：页面根滚动
+        return document.scrollingElement || document.documentElement;
+      }
+
+      // ✅ 【核心修复2：三重触发滚动，确保虚拟列表加载新用户】
+      async function scrollDouyinList() {
+        const container = findScrollContainer();
+        const beforeScrollTop = container.scrollTop;
+        console.log(`📜 执行滚动，当前滚动位置: ${beforeScrollTop}, 容器总高度: ${container.scrollHeight}`);
+
+        // 方式1：模拟物理滚轮（核心，触发React渲染）
         const stepCount = CONFIG.SCROLL_TOTAL_STEP / CONFIG.SCROLL_STEP;
         for (let j = 0; j < stepCount; j++) {
-          scrollContainer.dispatchEvent(new WheelEvent('wheel', {
+          container.dispatchEvent(new WheelEvent('wheel', {
             deltaY: CONFIG.SCROLL_STEP,
             bubbles: true,
             cancelable: true,
             composed: true
           }));
-          scrollContainer.scrollTop += CONFIG.SCROLL_STEP;
+          container.scrollTop += CONFIG.SCROLL_STEP;
           await sleep(50);
         }
+
+        // 方式2：强制scrollTo兜底
+        container.scrollTo({ top: container.scrollTop + CONFIG.SCROLL_TOTAL_STEP, behavior: 'smooth' });
+
+        // 方式3：PageDown键盘事件兜底
+        container.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'PageDown', code: 'PageDown', keyCode: 34, which: 34, bubbles: true
+        }));
+
+        await sleep(2000); // 【修复3：延长等待时间，给React足够渲染时间】
+        const afterScrollTop = container.scrollTop;
+        console.log(`📜 滚动完成，新滚动位置: ${afterScrollTop}, 滚动距离: ${afterScrollTop - beforeScrollTop}`);
+        
+        // 返回是否真的滚动了
+        return Math.abs(afterScrollTop - beforeScrollTop) > 20;
       }
 
       // 主遍历逻辑
       try {
-        console.log("✅ 列表容器已锁定，开始全量遍历（使用index.js滚动逻辑）");
+        const container = findScrollContainer();
+        console.log(`✅ 锁定滚动容器，容器高度: ${container.scrollHeight}`);
 
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
           console.log(`\n🔄 第 ${attempt + 1} 轮遍历 | 已处理: ${processedNicknames.size} | 剩余目标: ${remainingTargets.length}`);
           
-          // 获取当前页所有可见用户昵称元素
-          const allNameElements = Array.from(document.querySelectorAll('span[class*="name"], div[class*="name"]'));
+          // ✅ 【修复4：拓宽昵称选择器，确保新用户能被找到】
+          const allNameElements = Array.from(document.querySelectorAll(
+            'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span'
+          ));
+          
           // 过滤未处理的用户
           const unprocessedElements = allNameElements.filter(el => {
             const nickname = el.textContent.trim();
-            return nickname && !processedNicknames.has(nickname) && !el.hasAttribute(PROCESSED_ATTR);
+            // 严格过滤：非空、长度>1、未被内存标记、未被DOM标记
+            return nickname && nickname.length > 1 && !processedNicknames.has(nickname) && !el.hasAttribute(PROCESSED_ATTR);
           });
 
-          // 无新用户则执行index.js滚动逻辑，直接下滑
+          console.log(`📝 当前页找到 ${unprocessedElements.length} 个未处理用户`);
+
+          // 无新用户，执行滚动
           if (unprocessedElements.length === 0) {
-            console.log("⚠️ 当前页无未处理用户，执行index.js滚动逻辑加载更多");
+            console.log("⚠️ 当前页无未处理用户，执行滚动加载更多");
             noNewUserCount++;
-            if (noNewUserCount >= 3) {
-              console.log("🚫 连续3轮无新用户，列表已到底部，停止遍历");
+            
+            const isScrolled = await scrollDouyinList();
+            // 滚动无效，且达到最大次数，终止
+            if (!isScrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) {
+              console.log("🚫 已无法滚动到新内容，列表已到底部，停止遍历");
               break;
             }
-            await scrollDouyinList(); // 调用index.js滚动
-            await sleep(1200); // 滚动后等待，和index.js一致
             continue;
           }
 
           // 重置无新用户计数
           noNewUserCount = 0;
-          console.log(`📝 当前页找到 ${unprocessedElements.length} 个未处理用户，开始挨个查看`);
 
           // 挨个处理未查看用户
           for (const el of unprocessedElements) {
             const nickname = el.textContent.trim();
-            // 二次校验，避免重复处理
             if (processedNicknames.has(nickname) || el.hasAttribute(PROCESSED_ATTR)) continue;
 
             console.log(`👤 正在查看用户: ${nickname}`);
-            // 1. 点击用户（和原版一致）
+            // 点击用户
             el.scrollIntoView({ block: "center", behavior: "auto" });
             await sleep(100);
             el.click({ force: true });
             await sleep(1500);
 
-            // 2. 查找悬停目标，提取抖音号（和原版一致）
+            // 提取抖音号
             const hoverTarget = findHoverTarget();
             let dyId = null;
             if (hoverTarget) {
@@ -280,12 +312,12 @@ async function runSync() {
               triggerMouseEvent(hoverTarget, 'mouseleave');
             }
 
-            // 3. 标记为已查看（核心，无论是否匹配都标记）
+            // 标记为已查看
             processedNicknames.add(nickname);
             el.setAttribute(PROCESSED_ATTR, 'true');
             console.log(`✅ 已标记用户: ${nickname} | 提取抖音号: ${dyId || '未提取到'}`);
 
-            // 4. 目标匹配，更新结果（和原版一致）
+            // 目标匹配
             if (dyId && TARGET_DOUYIN_IDS.includes(dyId) && remainingTargets.includes(dyId)) {
               console.log(`%c🎯 命中目标: ${dyId} | 昵称: ${nickname}`, "color: #4CAF50; font-weight: bold;");
               results.push({ id: dyId, nickname: nickname });
@@ -297,27 +329,18 @@ async function runSync() {
               console.log("🎉 所有目标抖音号已找到，提前结束遍历");
               break;
             }
-            await sleep(300); // 操作间隔，防反爬
+            await sleep(300);
           }
 
-          // 所有目标找到，跳出外层循环
+          // 所有目标找到，跳出循环
           if (remainingTargets.length === 0) break;
 
-          // 当前页处理完毕，执行index.js滚动加载下一页
-          console.log("📥 当前页处理完毕，执行index.js滚动加载更多");
-          await scrollDouyinList(); // 调用index.js滚动
-          await sleep(1200); // 滚动后等待，和index.js一致
-
-          // 检查是否滚动到底部（和index.js逻辑一致）
-          const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items') || document.scrollingElement;
-          const isBottom = Math.abs(scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight) < 50;
-          if (isBottom) {
-            console.log("🚫 已滚动到列表最底部，停止遍历");
-            break;
-          }
+          // 当前页处理完毕，滚动加载下一页
+          console.log("📥 当前页所有用户处理完毕，滚动加载更多");
+          await scrollDouyinList();
         }
 
-        // 结果处理（按原Gitee顺序生成内容）
+        // 结果处理
         console.log("\n================ 🏁 遍历最终结果 ================");
         let content = "";
         TARGET_DOUYIN_IDS.forEach(id => {
@@ -343,32 +366,27 @@ async function runSync() {
           processedCount: processedNicknames.size
         };
       }
-    // 核心修复：把两个参数合并成一个对象传入
     }, { CONFIG, TARGET_DOUYIN_IDS });
 
-    // ========== 5. 结果处理与文件写入 ==========
+    // ========== 5. 结果处理 ==========
     log('info', `📝 遍历完成，共扫描处理 ${scanResult.processedCount || 0} 个用户`);
     if (!scanResult.success && scanResult.error) {
       log('warn', `⚠️ 遍历过程出现异常: ${scanResult.error}`);
     }
 
-    // 写入本地users.txt
     fs.writeFileSync(CONFIG.LOCAL_USERS_FILE, scanResult.content, 'utf8');
     log('success', `✅ ${CONFIG.LOCAL_USERS_FILE} 文件已成功生成/更新`);
     log('info', `🏁 任务全部完成，成功匹配 ${scanResult.results?.length || 0}/${TARGET_DOUYIN_IDS.length} 个目标抖音号`);
 
-    // 输出未找到的目标
     if (scanResult.remainingTargets?.length > 0) {
       log('warn', `⚠️ 未找到的目标抖音号: ${scanResult.remainingTargets.join(', ')}`);
     }
 
   } catch (err) {
-    // 全链路错误捕获
     log('error', `🚨 任务执行失败: ${err.message}`);
     log('error', '错误详情:', err.stack);
     process.exit(1);
   } finally {
-    // 确保浏览器关闭
     if (browser) {
       await browser.close();
       log('info', '✅ 浏览器已关闭，脚本执行完毕');
@@ -376,5 +394,4 @@ async function runSync() {
   }
 }
 
-// 执行主函数
 runSync();
