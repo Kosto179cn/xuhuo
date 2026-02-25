@@ -22,10 +22,35 @@ async function runSync() {
         log('info', '📥 正在调用 Gitee API 获取抖音号列表...');
         const giteeToken = process.env.GITEE_TOKEN;
         
+        // 检查 Token 是否存在
+        if (!giteeToken) {
+            log('error', '❌ GITEE_TOKEN 环境变量未设置！');
+            log('error', '请在 GitHub Secrets 中配置 GITEE_TOKEN');
+            process.exit(1);
+        }
+        
+        log('info', `✅ Token 已配置: ${giteeToken.substring(0, 10)}...`);
+        
         const response = await axios.get(GITEE_API_URL, {
             headers: { 
                 'Authorization': `token ${giteeToken}` 
             }
+        }).catch(error => {
+            if (error.response) {
+                log('error', `❌ Gitee API 请求失败: HTTP ${error.response.status}`);
+                if (error.response.status === 401) {
+                    log('error', '   Token 无效或权限不足');
+                    log('error', '   请检查 GITEE_TOKEN 是否正确且拥有仓库读取权限');
+                } else if (error.response.status === 403) {
+                    log('error', '   访问被拒绝，请检查 Token 权限');
+                } else if (error.response.status === 404) {
+                    log('error', '   文件未找到，请检查路径是否正确');
+                    log('error', `   当前路径: ${GITEE_API_URL}`);
+                }
+            } else {
+                log('error', `❌ 网络请求失败: ${error.message}`);
+            }
+            process.exit(1);
         });
 
         // Gitee API 返回的是 Base64 编码的内容
