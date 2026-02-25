@@ -20,19 +20,33 @@ async function runSync() {
 
         // 1. 调用 Gitee API 获取抖音号列表
         log('info', '📥 正在调用 Gitee API 获取抖音号列表...');
-        const giteeToken = process.env.GITEE_TOKEN;
-        
+        let giteeToken = process.env.GITEE_TOKEN;
+
         // 检查 Token 是否存在
         if (!giteeToken) {
-            log('error', '❌ GITEE_TOKEN 环境变量未设置！');
-            log('error', '请在 GitHub Secrets 中配置 GITEE_TOKEN');
+            log('error', '❌ 致命错误：环境变量中没有读到 GITEE_TOKEN');
+            log('error', '   请检查 .yml 文件中是否在 env 下配置了 GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}');
             process.exit(1);
         }
-        
-        log('info', `✅ Token 已配置: ${giteeToken.substring(0, 10)}...`);
 
-        const apiUrl = `${GITEE_API_URL}?access_token=${giteeToken}`;
-        const response = await axios.get(apiUrl).catch(error => {
+        // 🛠️ 关键修复 1: 去除 Token 可能存在的空格和换行符
+        giteeToken = giteeToken.trim();
+
+        // 调试日志
+        console.log(`✅ 成功读到 Token，长度为: ${giteeToken.length}`);
+        console.log(`   Token 前两位: ${giteeToken.substring(0, 2)}`);
+        console.log(`   Token 最后一位字符编码: ${giteeToken.charCodeAt(giteeToken.length - 1)}`);
+        // 如果最后一位编码是 10 或 13，说明这就是换行符导致的 401，必须用 .trim()
+
+        // 🛠️ 关键修复 2: 使用 params 传参,并添加 User-Agent
+        const response = await axios.get(GITEE_API_URL, {
+            params: {
+                access_token: giteeToken
+            },
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Node.js/SyncScript)' // 加上 User-Agent 防止被 API 识别为爬虫拦截
+            }
+        }).catch(error => {
             if (error.response) {
                 log('error', `❌ Gitee API 请求失败: HTTP ${error.response.status}`);
                 if (error.response.status === 401) {

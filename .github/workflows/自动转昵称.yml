@@ -47,8 +47,8 @@ jobs:
       - name: 🔍 执行同步脚本
         env:
           # 这里需要两个密钥：一个给Gitee，一个给抖音
-          GITEE_TOKEN: $
-          DOUYIN_COOKIES: $
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
         run: |
           # 启用核心转储或调试日志（如果需要）
           # 如果脚本报错，可以在这里加 DEBUG=* 来查看详细日志
