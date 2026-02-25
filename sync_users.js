@@ -32,8 +32,8 @@ async function runSync() {
         log('info', `✅ Token 已配置: ${giteeToken.substring(0, 10)}...`);
         
         const response = await axios.get(GITEE_API_URL, {
-            headers: { 
-                'Authorization': `token ${giteeToken}` 
+            params: {
+                access_token: giteeToken
             }
         }).catch(error => {
             if (error.response) {
