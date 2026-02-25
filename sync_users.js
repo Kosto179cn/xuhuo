@@ -81,7 +81,15 @@ async function runSync() {
         
         // 注入抖音 Cookie
         const rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
-        await context.addCookies(rawCookies);
+        // 清理 Cookie 数据：修正 sameSite 值
+        const cleanedCookies = rawCookies.map(cookie => ({
+            ...cookie,
+            sameSite: cookie.sameSite === 'no_restriction' ? 'None' : 
+                     cookie.sameSite === 'unspecified' ? 'Lax' :
+                     cookie.sameSite === 'None' || cookie.sameSite === 'Lax' || cookie.sameSite === 'Strict' 
+                     ? cookie.sameSite : 'Lax'
+        })).filter(cookie => cookie.name && cookie.domain); // 过滤无效 Cookie
+        await context.addCookies(cleanedCookies);
         
         page = await context.newPage();
 
