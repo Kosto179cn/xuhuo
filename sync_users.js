@@ -30,12 +30,9 @@ async function runSync() {
         }
         
         log('info', `✅ Token 已配置: ${giteeToken.substring(0, 10)}...`);
-        
-        const response = await axios.get(GITEE_API_URL, {
-            params: {
-                access_token: giteeToken
-            }
-        }).catch(error => {
+
+        const apiUrl = `${GITEE_API_URL}?access_token=${giteeToken}`;
+        const response = await axios.get(apiUrl).catch(error => {
             if (error.response) {
                 log('error', `❌ Gitee API 请求失败: HTTP ${error.response.status}`);
                 if (error.response.status === 401) {
