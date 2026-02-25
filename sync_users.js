@@ -102,8 +102,8 @@ async function runSync() {
         for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS && pendingDyIds.length > 0; attempt++) {
             log('info', `🔄 第 ${attempt + 1}/${MAX_SCROLL_ATTEMPTS} 轮扫描，剩余待查找: ${pendingDyIds.length}`);
 
-            // 页面内执行查找：匹配可见用户，提取抖音号
-            const scanResult = await page.evaluate((pendingIds) => {
+            // 页面内执行查找：匹配可见用户，提取抖音号【修复核心：加async】
+            const scanResult = await page.evaluate(async (pendingIds) => {
                 const result = { found: [], remaining: [...pendingIds] };
                 // 创作者中心用户名选择器（适配哈希类名）
                 const nameElements = Array.from(document.querySelectorAll(
@@ -195,6 +195,17 @@ async function runSync() {
 
             // 检测是否滚动到底部
             const isBottom = await page.evaluate(() => {
+                function findScrollContainer() {
+                    const allDivs = document.querySelectorAll('div');
+                    for (const div of allDivs) {
+                        const style = getComputedStyle(div);
+                        const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+                        const isTall = div.clientHeight > window.innerHeight * 0.65;
+                        const hasItems = div.querySelector('[class*="user"]') || div.querySelector('[class*="message"]');
+                        if (isScrollable && isTall && hasItems) return div;
+                    }
+                    return document.scrollingElement || document.documentElement;
+                }
                 const container = findScrollContainer();
                 return Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) < 50;
             });
