@@ -153,8 +153,11 @@ async function runSync() {
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
 
-    // ================= 【核心：融合index.js滚动+全量遍历标记】 =================
-    const scanResult = await page.evaluate(async (CONFIG, TARGET_DOUYIN_IDS) => {
+    // ================= 【核心修复：合并参数，解决evaluate参数超限问题】 =================
+    const scanResult = await page.evaluate(async (params) => {
+      // 解构出两个参数，内部逻辑完全不变
+      const { CONFIG, TARGET_DOUYIN_IDS } = params;
+      
       // 结果存储
       const results = [];
       // 双重防重复标记：内存Set + DOM自定义属性（和原版一致）
@@ -340,7 +343,8 @@ async function runSync() {
           processedCount: processedNicknames.size
         };
       }
-    }, CONFIG, TARGET_DOUYIN_IDS);
+    // 核心修复：把两个参数合并成一个对象传入
+    }, { CONFIG, TARGET_DOUYIN_IDS });
 
     // ========== 5. 结果处理与文件写入 ==========
     log('info', `📝 遍历完成，共扫描处理 ${scanResult.processedCount || 0} 个用户`);
