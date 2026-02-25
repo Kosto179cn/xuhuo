@@ -5,9 +5,9 @@ name: 🔗 Gitee同步 - 抖音ID转昵称
 # 2. 定时任务 (例如每小时检查一次Gitee是否有更新)
 # 3. 当sync_users.js文件更新时触发
 on:
-  schedule:
-    # 每天早上 8点 和 晚上 8点 检查更新 (北京时间需+8小时)
-    - cron: '0 0,12 * * *'
+  # schedule:
+  #   # 每天早上 8点 和 晚上 8点 检查更新 (北京时间需+8小时)
+  #   - cron: '0 0,12 * * *'
   workflow_dispatch: # 允许手动点击运行
     inputs:
       mode:
