@@ -8,10 +8,10 @@ const CONFIG = {
   LOCAL_USERS_FILE: 'users.txt',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
-  // 单次滚动步长（适配相邻用户滚动）
+  // 单次滚动步长（适配相邻用户滚动，正反向通用）
   SCROLL_STEP: 200,
   // 滚动到底部/顶部的最大重试次数
-  MAX_SCROLL_RETRY: 5
+  MAX_SCROLL_RETRY: 6
 };
 
 // 日志函数
@@ -22,7 +22,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（顺序遍历+来回兜底版）');
+    log('info', '🚀 启动抖音用户同步脚本（正反向全量滚动版）');
 
     // ========== 1. 环境变量校验 ==========
     const giteeToken = process.env.GITEE_TOKEN?.trim();
@@ -150,7 +150,7 @@ async function runSync() {
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始顺序遍历');
 
-    // ================= 【核心：完全按你要求的遍历逻辑】 =================
+    // ================= 【核心：正反向全量遍历+上下滑完全匹配】 =================
     const scanResult = await page.evaluate(async (params) => {
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
@@ -217,6 +217,48 @@ async function runSync() {
           });
       }
 
+      // ✅ 【核心：通用滚动函数，正反向完全匹配】
+      // direction: down=向下滑（正序），up=向上滑（反向）
+      async function scrollList(direction = 'down') {
+        const container = findScrollContainer();
+        const step = direction === 'down' ? CONFIG.SCROLL_STEP : -CONFIG.SCROLL_STEP;
+        const beforeScrollTop = container.scrollTop;
+        console.log(`📜 执行${direction === 'down' ? '向下' : '向上'}滚动，当前位置: ${beforeScrollTop}`);
+
+        // 方式1：模拟物理滚轮（核心，触发React虚拟列表渲染）
+        const stepCount = CONFIG.SCROLL_STEP / 100;
+        for (let j = 0; j < stepCount; j++) {
+          container.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: direction === 'down' ? 100 : -100, // 负数=向上滚
+            bubbles: true,
+            cancelable: true,
+            composed: true
+          }));
+          container.scrollTop += direction === 'down' ? 100 : -100;
+          await sleep(50);
+        }
+
+        // 方式2：强制scrollTo兜底
+        container.scrollTo({ top: container.scrollTop + step, behavior: 'smooth' });
+
+        // 方式3：键盘事件兜底
+        container.dispatchEvent(new KeyboardEvent('keydown', {
+          key: direction === 'down' ? 'PageDown' : 'PageUp',
+          code: direction === 'down' ? 'PageDown' : 'PageUp',
+          keyCode: direction === 'down' ? 34 : 33,
+          which: direction === 'down' ? 34 : 33,
+          bubbles: true
+        }));
+
+        await sleep(2000); // 固定等待，给React足够渲染时间
+        const afterScrollTop = container.scrollTop;
+        const scrollDistance = Math.abs(afterScrollTop - beforeScrollTop);
+        console.log(`📜 ${direction === 'down' ? '向下' : '向上'}滚动完成，新位置: ${afterScrollTop}，滚动距离: ${scrollDistance}`);
+        
+        // 返回是否真的滚动了
+        return scrollDistance > 20;
+      }
+
       // 核心：处理单个用户（点击→提取抖音号→匹配→标记）
       async function processUser(el) {
         const nickname = el.textContent.trim();
@@ -268,12 +310,10 @@ async function runSync() {
         return { skip: false, dyId };
       }
 
-      // ================= 第一遍：从上到下正序遍历 =================
+      // ================= 第一遍：从上到下正序遍历（往下滑列表） =================
       async function runForwardScan() {
         console.log("\n==================== 开始正序遍历（从上到下） ====================");
-        const container = findScrollContainer();
         let retryCount = 0;
-        let lastProcessedIndex = -1;
 
         while (retryCount < CONFIG.MAX_SCROLL_RETRY) {
           // 所有目标已找到，提前结束
@@ -285,9 +325,8 @@ async function runSync() {
           // 获取当前所有可见用户
           const userElements = getAllUserElements();
           if (userElements.length === 0) {
-            console.warn("⚠️ 未找到用户元素，尝试滚动");
-            container.scrollBy({ top: CONFIG.SCROLL_STEP });
-            await sleep(1000);
+            console.warn("⚠️ 未找到用户元素，尝试向下滚动");
+            await scrollList('down');
             retryCount++;
             continue;
           }
@@ -298,19 +337,16 @@ async function runSync() {
             const nickname = userElements[i].textContent.trim();
             if (!processedNicknames.has(nickname)) {
               nextUserEl = userElements[i];
-              lastProcessedIndex = i;
               break;
             }
           }
 
-          // 没有找到未处理的用户，尝试滚动加载更多
+          // 没有找到未处理的用户，尝试向下滚动加载更多
           if (!nextUserEl) {
-            console.log("⚠️ 当前页无未处理用户，滚动加载更多");
-            const beforeScroll = container.scrollTop;
-            container.scrollBy({ top: CONFIG.SCROLL_STEP });
-            await sleep(1500);
+            console.log("⚠️ 当前页无未处理用户，向下滚动加载更多");
+            const isScrolled = await scrollList('down');
             // 滚动距离过小，说明已经到底部
-            if (Math.abs(container.scrollTop - beforeScroll) < 20) {
+            if (!isScrolled) {
               retryCount++;
             } else {
               retryCount = 0;
@@ -328,7 +364,7 @@ async function runSync() {
         console.log(`📊 正序遍历共处理 ${processedNicknames.size} 个用户，剩余目标 ${remainingTargets.length} 个`);
       }
 
-      // ================= 第二遍：从下到上反向遍历（兜底） =================
+      // ================= 第二遍：从下到上反向遍历（往上滑列表，完全匹配你的需求） =================
       async function runBackwardScan() {
         // 所有目标已找到，不用反向遍历
         if (remainingTargets.length === 0) {
@@ -340,19 +376,20 @@ async function runSync() {
         const container = findScrollContainer();
         let retryCount = 0;
 
-        // 先滚动到列表最底部
-        console.log("📜 先滚动到列表最底部");
-        while (retryCount < CONFIG.MAX_SCROLL_RETRY) {
+        // 第一步：先滚动到列表最底部，作为反向遍历的起点
+        console.log("📜 先滚动到列表最底部，准备反向遍历");
+        let bottomRetry = 0;
+        while (bottomRetry < CONFIG.MAX_SCROLL_RETRY) {
           const beforeScroll = container.scrollTop;
           container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
           await sleep(1500);
           if (Math.abs(container.scrollTop - beforeScroll) < 20) {
-            retryCount++;
+            bottomRetry++;
           } else {
-            retryCount = 0;
+            bottomRetry = 0;
           }
         }
-        console.log("✅ 已滚动到列表最底部，开始反向遍历");
+        console.log("✅ 已滚动到列表最底部，开始从下往上遍历+往上滑列表");
         retryCount = 0;
 
         while (retryCount < CONFIG.MAX_SCROLL_RETRY) {
@@ -366,8 +403,7 @@ async function runSync() {
           const userElements = getAllUserElements();
           if (userElements.length === 0) {
             console.warn("⚠️ 未找到用户元素，尝试向上滚动");
-            container.scrollBy({ top: -CONFIG.SCROLL_STEP });
-            await sleep(1000);
+            await scrollList('up'); // 往上滑列表
             retryCount++;
             continue;
           }
@@ -382,14 +418,12 @@ async function runSync() {
             }
           }
 
-          // 没有找到未处理的用户，尝试向上滚动加载更多
+          // 没有找到未处理的用户，尝试向上滚动加载更多（往上滑列表）
           if (!nextUserEl) {
-            console.log("⚠️ 当前页无未处理用户，向上滚动加载更多");
-            const beforeScroll = container.scrollTop;
-            container.scrollBy({ top: -CONFIG.SCROLL_STEP });
-            await sleep(1500);
+            console.log("⚠️ 当前页无未处理用户，向上滚动列表加载更多");
+            const isScrolled = await scrollList('up'); // 往上滑列表
             // 滚动距离过小，说明已经到顶部
-            if (Math.abs(container.scrollTop - beforeScroll) < 20) {
+            if (!isScrolled) {
               retryCount++;
             } else {
               retryCount = 0;
@@ -415,10 +449,10 @@ async function runSync() {
         container.scrollTo({ top: 0, behavior: 'smooth' });
         await sleep(2000);
 
-        // 第二步：正序遍历（从上到下）
+        // 第二步：正序遍历（从上到下，往下滑列表）
         await runForwardScan();
 
-        // 第三步：反向遍历（从下到上，兜底）
+        // 第三步：反向遍历（从下到上，往上滑列表，完全匹配你的需求）
         await runBackwardScan();
 
         // 结果处理
