@@ -3,7 +3,7 @@ name: 🔗 Gitee同步 - 抖音ID转昵称
 # 三种触发方式：
 # 1. 手动触发 (workflow_dispatch)
 # 2. 定时任务 (例如每小时检查一次Gitee是否有更新)
-# 3. 当Gitee文件更新时触发 (需要Gitee Webhook，此处未配置，以定时为主)
+# 3. 当sync_users.js文件更新时触发
 on:
   schedule:
     # 每天早上 8点 和 晚上 8点 检查更新 (北京时间需+8小时)
@@ -18,6 +18,13 @@ on:
         options:
           - sync
           - debug
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'sync_users.js'
+      - '.github/workflows/自动转昵称.yml'
 
 jobs:
   sync-users:
