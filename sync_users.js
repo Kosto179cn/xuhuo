@@ -2,19 +2,24 @@
 const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 
 // 配置信息
 // Gitee API 文档: https://gitee.com/api/v5/swagger#/getV5ReposOwnerRepoContentsPath
 const GITEE_API_URL = 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyinh.txt';
 const LOCAL_USERS_FILE = 'users.txt';
+const CREATOR_CHAT_URL = 'https://creator.douyin.com/creator-micro/data/following/chat';
+const GOTO_TIMEOUT = 60000;
+
+const log = (level, msg) => console.log(`[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${msg}`);
 
 async function runSync() {
     let browser, page;
     try {
-        console.log('🚀 开始同步用户列表...');
+        log('info', '🚀 开始同步用户列表...');
 
-        // 1. 调用 Gitee API 获取文件内容
-        console.log('📥 正在调用 Gitee API 获取抖音号列表...');
+        // 1. 调用 Gitee API 获取抖音号列表
+        log('info', '📥 正在调用 Gitee API 获取抖音号列表...');
         const giteeToken = process.env.GITEE_TOKEN;
         
         const response = await axios.get(GITEE_API_URL, {
@@ -25,81 +30,153 @@ async function runSync() {
 
         // Gitee API 返回的是 Base64 编码的内容
         const fileContent = Buffer.from(response.data.content, 'base64').toString();
-        const dyIds = fileContent.split('\n')
+        const targetDyIds = fileContent.split('\n')
                                   .map(id => id.trim())
                                   .filter(id => id && !id.startsWith('#')); // 过滤空行和注释
         
-        console.log(`✅ 从 Gitee 获取到 ${dyIds.length} 个抖音号:`, dyIds);
+        log('success', `✅ 从 Gitee 获取到 ${targetDyIds.length} 个目标抖音号`, targetDyIds);
 
         // 2. 启动浏览器并加载 Cookie
         browser = await chromium.launch({ headless: true });
-        page = await browser.newPage();
-
+        const context = await browser.newContext({
+            viewport: { width: 1920, height: 1080 },
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        });
+        
         // 注入抖音 Cookie
         const rawCookies = JSON.parse(process.env.DOUYIN_COOKIES);
-        await page.context().addCookies(rawCookies);
+        await context.addCookies(rawCookies);
         
-        // 3. 遍历 ID 进行搜索解析
-        const nicknames = [];
+        page = await context.newPage();
 
-        for (const dyId of dyIds) {
-            console.log(`🔍 正在解析抖音号: ${dyId}`);
+        // 3. 进入创作者后台私信页面
+        log('info', '🌐 正在进入抖音创作者后台私信页面...');
+        await page.goto(CREATOR_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT });
+        await page.waitForTimeout(10000);
+
+        if (page.url().includes('login')) {
+            log('error', '❌ Cookie 已失效');
+            process.exit(1);
+        }
+
+        // 4. 核心逻辑：滚动查找抖音号并获取对应昵称
+        // 使用待办列表模式
+        let pendingDyIds = [...targetDyIds]; // 创建副本，避免修改原数组
+        let foundNicknames = [];
+
+        log('info', `🔍 开始查找 ${pendingDyIds.length} 个抖音号对应的昵称...`);
+
+        // 只要还有待查找的抖音号，就继续循环
+        while (pendingDyIds.length > 0) {
+            // 记录本轮查找前的列表长度
+            const beforeLength = pendingDyIds.length;
             
-            // 构造抖音搜索 URL
-            const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(dyId)}?type=user`;
-            await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            // 遍历当前页面可见区域（模拟滚动查找）
+            for (let i = 0; i < 30; i++) {
+                // 检查是否还有抖音号需要查找
+                if (pendingDyIds.length === 0) break;
 
-            // 核心逻辑：在搜索结果中找到对应的用户昵称
-            const nickname = await page.evaluate((targetId) => {
-                // 抖音搜索结果的选择器可能会变，这里提供一个通用的查找逻辑
-                // 目标：找到包含该 ID 文本的元素，然后找到它旁边的昵称元素
-                
-                // 查找所有显示“抖音号: xxx”的元素
-                const idElements = document.querySelectorAll('span');
-                for (const el of idElements) {
-                    if (el.innerText.includes(`抖音号：${targetId}`) || el.innerText.includes(targetId)) {
-                        // 尝试向上找到用户项，再找昵称
-                        // 这是一个相对定位的逻辑，因为抖音的 DOM 结构较深
-                        let parent = el.parentElement;
-                        while (parent && !parent.classList?.contains('user-item-class')) { // 这里可能需要根据实际情况调整
-                            parent = parent.parentElement;
-                        }
+                // 在当前页面视图中尝试查找待办列表中的抖音号
+                const result = await page.evaluate((targetIds) => {
+                    // 查找所有显示昵称的元素
+                    const nameSelector = 'span[class*="name"], div[class*="name"]';
+                    const nameElements = Array.from(document.querySelectorAll(nameSelector)).filter(el => el.innerText.trim());
+                    
+                    // 遍历页面上的所有昵称元素
+                    for (const el of nameElements) {
+                        const text = el.textContent.trim();
+                        el.scrollIntoView();
+                        el.click(); // 点击进入聊天/触发弹窗
                         
-                        // 假设昵称在同一个父级下的 .user-name 类中
-                        const nameEl = parent?.querySelector('.ER9c4Xg7') || parent?.closest('.o3knt0vT')?.querySelector('.ER9c4Xg7');
-                        // 注意：'.ER9c4Xg7' 是抖音昵称常见的类名，但它是动态的。如果失效，请在浏览器中检查当前的类名。
-                        
-                        if (nameEl) return nameEl.innerText.trim();
+                        // 等待弹窗出现
+                        return new Promise((resolve) => {
+                            setTimeout(() => {
+                                // 检查是否出现了 semi-portal 弹窗
+                                const portals = document.querySelectorAll('.semi-portal');
+                                let foundDyId = null;
+                                
+                                for (const portal of portals) {
+                                    if (portal.innerText.includes('抖音号：')) {
+                                        const match = portal.innerText.match(/抖音号：\s*([\w\.\-_]+)/);
+                                        if (match) {
+                                            foundDyId = match[1];
+                                            // 如果这个抖音号在目标列表中
+                                            if (targetIds.includes(foundDyId)) {
+                                                resolve({ found: true, nickname: text, dyId: foundDyId });
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                                resolve({ found: false, nickname: null, dyId: null });
+                            }, 1500); // 等待1.5秒让弹窗出现
+                        });
                     }
-                }
-                return null;
-            }, dyId);
+                    return { found: false, nickname: null, dyId: null };
+                }, pendingDyIds);
 
-            if (nickname) {
-                nicknames.push(nickname);
-                console.log(`🔗 映射成功: ${dyId} -> ${nickname}`);
-            } else {
-                console.warn(`⚠️ 未找到用户或解析失败 (使用备用逻辑): ${dyId}`);
-                // ⭐ 备用逻辑：如果通过搜索找不到，直接使用 ID 作为昵称（仅当该用户的个人主页就是该 ID 时有效）
-                // 因为有些用户的昵称就是 ID，或者搜索被风控了
-                nicknames.push(dyId);
+                if (result.found && result.nickname) {
+                    // 找到了：记录昵称，从待办列表移除抖音号
+                    const { nickname, dyId } = result;
+                    foundNicknames.push(nickname);
+                    log('success', `🔗 找到: ${dyId} -> ${nickname}`);
+                    
+                    // ⭐ 关键步骤：从待办列表中移除该抖音号 (标记完成)
+                    pendingDyIds = pendingDyIds.filter(id => id !== dyId);
+                    
+                    await page.waitForTimeout(500); // 查找间隔
+                } else {
+                    // 如果当前这一轮滚动没有找到任何待办抖音号，使用物理滚轮方式滚动
+                    await page.evaluate(async () => {
+                        const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+                        if (!scrollContainer) {
+                            window.scrollBy(0, 800);
+                            return;
+                        }
+                        // 模拟物理滚轮：分小步滑动，每次100像素，共8次=800像素
+                        for (let j = 0; j < 8; j++) {
+                            scrollContainer.dispatchEvent(new WheelEvent('wheel', {
+                                deltaY: 100,
+                                bubbles: true,
+                                cancelable: true,
+                                composed: true
+                            }));
+                            // 物理辅助：强制移动滚动条位置以触发 React 重绘
+                            scrollContainer.scrollTop += 100;
+                            await new Promise(r => setTimeout(r, 50)); // 每步停50ms产生平滑效果
+                        }
+                    });
+                    // 等待 React 把新用户渲染出来
+                    await page.waitForTimeout(1200);
+                }
             }
 
-            // 随机等待，防止被风控
-            await page.waitForTimeout(3000 + Math.random() * 2000);
+            // 5. 完成判断
+            // 如果经过一轮完整的滚动查找（30次），待办列表长度没有变化
+            // 说明剩下的抖音号可能不存在，或者已经查完了，避免死循环，强制退出
+            const afterLength = pendingDyIds.length;
+            if (afterLength === beforeLength) {
+                log('warn', `⚠️ 经过一轮查找未发现新用户，剩余 ${afterLength} 个抖音号可能无法送达:`, pendingDyIds.join(', '));
+                break;
+            }
         }
 
-        // 4. 写入本地 users.txt
-        if (nicknames.length > 0) {
-            fs.writeFileSync(LOCAL_USERS_FILE, nicknames.join('\n'));
-            console.log(`🎉 成功更新 ${LOCAL_USERS_FILE}，共 ${nicknames.length} 个用户`);
-            console.log('更新内容预览:', nicknames);
+        // 6. 写入本地 users.txt (每个昵称占一行)
+        if (foundNicknames.length > 0) {
+            const content = foundNicknames.join('\n'); // 用换行符连接，每个昵称占一行
+            fs.writeFileSync(LOCAL_USERS_FILE, content, 'utf8');
+            log('success', `🎉 成功更新 ${LOCAL_USERS_FILE}，共 ${foundNicknames.length} 个昵称`);
+            log('info', '更新内容预览:', foundNicknames);
         } else {
-            throw new Error('未能解析出任何昵称');
+            log('warn', '⚠️ 未找到任何昵称，使用原始抖音号列表');
+            const content = targetDyIds.join('\n'); // 原始列表，每个占一行
+            fs.writeFileSync(LOCAL_USERS_FILE, content, 'utf8');
         }
+
+        log('info', `🏁 任务结束，成功找到 ${foundNicknames.length}/${targetDyIds.length} 个昵称`);
 
     } catch (error) {
-        console.error('🚨 同步过程发生错误:', error.message);
+        log('error', `🚨 同步过程发生错误: ${error.message}`);
         process.exit(1);
     } finally {
         if (browser) await browser.close();
