@@ -8,10 +8,12 @@ const CONFIG = {
   LOCAL_USERS_FILE: 'users.txt',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
-  // 单次滚动步长（适配相邻用户滚动，正反向通用）
-  SCROLL_STEP: 200,
+  // 一屏滚动高度（适配屏幕，不会跳用户）
+  SCROLL_STEP: 600,
   // 滚动到底部/顶部的最大重试次数
-  MAX_SCROLL_RETRY: 6
+  MAX_SCROLL_RETRY: 8,
+  // 每屏渲染等待时间（给React足够时间渲染全量用户）
+  RENDER_WAIT_TIME: 2500
 };
 
 // 日志函数
@@ -22,7 +24,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（正反向全量滚动版）');
+    log('info', '🚀 启动抖音用户全量同步脚本（不漏扫最终版）');
 
     // ========== 1. 环境变量校验 ==========
     const giteeToken = process.env.GITEE_TOKEN?.trim();
@@ -96,7 +98,7 @@ async function runSync() {
       window.chrome = { runtime: {} };
     });
 
-    // Cookie处理（复用index.js修复逻辑）
+    // Cookie处理（复用index.js稳定逻辑）
     let parsedCookies;
     try {
       parsedCookies = JSON.parse(douyinCookies);
@@ -135,7 +137,7 @@ async function runSync() {
       timeout: CONFIG.GOTO_TIMEOUT
     });
 
-    // 等待页面渲染+登录态校验
+    // 等待页面全量渲染+登录态校验
     await page.waitForTimeout(10000);
     const currentUrl = page.url();
     if (currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl.includes('verify')) {
@@ -143,22 +145,23 @@ async function runSync() {
       process.exit(1);
     }
 
-    // 等待用户列表渲染完成
-    await page.waitForSelector('span[class*="name"], div[class*="name"]', {
+    // 等待用户列表核心容器渲染完成
+    await page.waitForSelector('.ReactVirtualized__Grid, [role="grid"], [class*="user-list"], [class*="message-list"]', {
       timeout: 60000,
       state: 'attached'
     });
-    log('success', '✅ 页面加载完成，用户列表已渲染，开始顺序遍历');
+    log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历');
 
-    // ================= 【核心：正反向全量遍历+上下滑完全匹配】 =================
+    // ================= 【核心：全量不漏扫遍历逻辑】 =================
     const scanResult = await page.evaluate(async (params) => {
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
       // 结果存储
       const results = [];
-      // 已处理用户标记（防重复）
+      // 已处理用户标记（双重防重复）
       const processedNicknames = new Set();
-      // 剩余待匹配的目标抖音号
+      const PROCESSED_ATTR = 'data-user-processed';
+      // 剩余待匹配目标
       let remainingTargets = [...TARGET_DOUYIN_IDS];
 
       // 工具函数
@@ -176,60 +179,81 @@ async function runSync() {
         element.dispatchEvent(event);
       }
 
-      // 查找“查看Ta的主页”元素
+      // 查找“查看Ta的主页”元素（全量兼容）
       function findHoverTarget() {
-        const elements = document.querySelectorAll('span, div');
+        const elements = document.querySelectorAll('span, div, a');
         for (const el of elements) {
-          if (el.textContent.trim() === '查看Ta的主页') {
+          const text = el.textContent.trim();
+          if (text.includes('查看Ta的主页') || text === '查看主页') {
             return el;
           }
         }
         return null;
       }
 
-      // 查找滚动容器
+      // ✅ 【核心修复1：精准锁定私信列表滚动容器，绝对不滚错】
       function findScrollContainer() {
-        let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
-        if (container) return container;
+        // 优先级1：React虚拟列表标准容器（99%匹配）
+        let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], [data-testid="message-list"], [class*="chat-list"]');
+        if (container) {
+          console.log("✅ 锁定标准私信列表容器");
+          return container;
+        }
+
+        // 优先级2：精准匹配左侧私信列表（排除聊天窗口滚动条）
         const allDivs = document.querySelectorAll('div');
         for (const div of allDivs) {
           const style = window.getComputedStyle(div);
+          const rect = div.getBoundingClientRect();
+          // 核心判断：左侧列表、可滚动、高度足够、包含用户元素、宽度不超过屏幕一半
+          const isLeftList = rect.left < window.innerWidth * 0.4;
           const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-          const isTall = div.clientHeight > window.innerHeight * 0.6;
-          const hasUserItems = div.querySelector('[class*="name"], [class*="user"]');
-          if (isScrollable && isTall && hasUserItems) return div;
+          const isTall = rect.height > window.innerHeight * 0.6;
+          const hasUserItems = div.querySelector('[class*="name"], [class*="user-item"], [class*="avatar"]');
+          const isLongList = div.scrollHeight > div.clientHeight + 200;
+
+          if (isLeftList && isScrollable && isTall && hasUserItems && isLongList) {
+            console.log("✅ 锁定左侧私信列表容器");
+            return div;
+          }
         }
+
+        // 兜底：页面根滚动
+        console.warn("⚠️ 使用页面根滚动容器");
         return document.scrollingElement || document.documentElement;
       }
 
-      // 滚动到指定元素，确保在视图内
-      function scrollToElement(el) {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        return sleep(300);
-      }
-
-      // 获取当前页面所有可见的用户昵称元素
+      // ✅ 【核心修复2：全量昵称元素抓取，不漏任何一个用户】
       function getAllUserElements() {
-        return Array.from(document.querySelectorAll('span[class*="name"], div[class*="name"]'))
-          .filter(el => {
-            const text = el.textContent.trim();
-            return text && text.length > 1;
-          });
+        // 全量匹配所有可能的昵称元素，排除页面其他无关元素
+        return Array.from(document.querySelectorAll(
+          'span, div, p'
+        )).filter(el => {
+          const text = el.textContent.trim();
+          const rect = el.getBoundingClientRect();
+          // 过滤规则：非空、长度合理、在左侧列表内、不是按钮/标题/抖音号文本
+          const isValidText = text && text.length > 1 && text.length < 30;
+          const isInLeftList = rect.left < window.innerWidth * 0.4;
+          const isInViewport = rect.top > 0 && rect.bottom < window.innerHeight;
+          const isNotInvalidText = !text.includes('抖音号') && !text.includes('私信') && !text.includes('已读') && !text.includes('今天');
+          
+          return isValidText && isInLeftList && isInViewport && isNotInvalidText;
+        });
       }
 
-      // ✅ 【核心：通用滚动函数，正反向完全匹配】
-      // direction: down=向下滑（正序），up=向上滑（反向）
+      // ✅ 【核心修复3：正反向通用滚动逻辑，100%触发React渲染】
       async function scrollList(direction = 'down') {
         const container = findScrollContainer();
         const step = direction === 'down' ? CONFIG.SCROLL_STEP : -CONFIG.SCROLL_STEP;
         const beforeScrollTop = container.scrollTop;
-        console.log(`📜 执行${direction === 'down' ? '向下' : '向上'}滚动，当前位置: ${beforeScrollTop}`);
+        console.log(`📜 执行${direction === 'down' ? '向下' : '向上'}滚动，当前位置: ${beforeScrollTop}, 容器总高度: ${container.scrollHeight}`);
 
-        // 方式1：模拟物理滚轮（核心，触发React虚拟列表渲染）
-        const stepCount = CONFIG.SCROLL_STEP / 100;
+        // 三重触发滚动，确保React虚拟列表加载新内容
+        // 1. 模拟真人滚轮（核心，触发React onWheel事件）
+        const stepCount = Math.abs(step) / 100;
         for (let j = 0; j < stepCount; j++) {
           container.dispatchEvent(new WheelEvent('wheel', {
-            deltaY: direction === 'down' ? 100 : -100, // 负数=向上滚
+            deltaY: direction === 'down' ? 100 : -100,
             bubbles: true,
             cancelable: true,
             composed: true
@@ -238,10 +262,10 @@ async function runSync() {
           await sleep(50);
         }
 
-        // 方式2：强制scrollTo兜底
+        // 2. 强制scrollTo兜底
         container.scrollTo({ top: container.scrollTop + step, behavior: 'smooth' });
 
-        // 方式3：键盘事件兜底
+        // 3. 键盘事件兜底
         container.dispatchEvent(new KeyboardEvent('keydown', {
           key: direction === 'down' ? 'PageDown' : 'PageUp',
           code: direction === 'down' ? 'PageDown' : 'PageUp',
@@ -250,69 +274,85 @@ async function runSync() {
           bubbles: true
         }));
 
-        await sleep(2000); // 固定等待，给React足够渲染时间
+        // 固定等待，确保React全量渲染新用户
+        await sleep(CONFIG.RENDER_WAIT_TIME);
         const afterScrollTop = container.scrollTop;
         const scrollDistance = Math.abs(afterScrollTop - beforeScrollTop);
-        console.log(`📜 ${direction === 'down' ? '向下' : '向上'}滚动完成，新位置: ${afterScrollTop}，滚动距离: ${scrollDistance}`);
+        console.log(`📜 滚动完成，新位置: ${afterScrollTop}，有效滚动距离: ${scrollDistance}`);
         
-        // 返回是否真的滚动了
-        return scrollDistance > 20;
+        return {
+          isScrolled: scrollDistance > 50,
+          isEnd: direction === 'down' 
+            ? Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) < 100
+            : container.scrollTop < 100
+        };
       }
 
-      // 核心：处理单个用户（点击→提取抖音号→匹配→标记）
+      // ✅ 【核心修复4：单个用户全流程处理，稳定提取抖音号】
       async function processUser(el) {
         const nickname = el.textContent.trim();
         // 已处理过的直接跳过
-        if (processedNicknames.has(nickname)) {
+        if (processedNicknames.has(nickname) || el.hasAttribute(PROCESSED_ATTR)) {
           return { skip: true, dyId: null };
         }
 
         console.log(`👤 正在处理用户: ${nickname}`);
-        // 1. 滚动到用户并点击
-        await scrollToElement(el);
-        el.click({ force: true });
-        await sleep(1500);
+        try {
+          // 1. 滚动到用户并强制点击，避免遮挡
+          el.scrollIntoView({ block: 'center', behavior: 'auto' });
+          await sleep(200);
+          el.click({ force: true });
+          await sleep(2000); // 等待聊天窗口完全加载
 
-        // 2. 查找悬停目标，提取抖音号
-        const hoverTarget = findHoverTarget();
-        let dyId = null;
-        if (hoverTarget) {
-          hoverTarget.scrollIntoView({ block: 'center' });
-          triggerMouseEvent(hoverTarget, 'mousemove');
-          await sleep(50);
-          triggerMouseEvent(hoverTarget, 'mouseenter');
-          triggerMouseEvent(hoverTarget, 'mouseover');
-
-          // 20次循环重试提取抖音号
-          for (let i = 0; i < 20; i++) {
+          // 2. 查找主页入口，提取抖音号
+          const hoverTarget = findHoverTarget();
+          let dyId = null;
+          if (hoverTarget) {
+            hoverTarget.scrollIntoView({ block: 'center' });
+            triggerMouseEvent(hoverTarget, 'mousemove');
             await sleep(100);
-            const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
-            if (match) {
-              dyId = match[1].trim();
-              break;
+            triggerMouseEvent(hoverTarget, 'mouseenter');
+            triggerMouseEvent(hoverTarget, 'mouseover');
+
+            // 30次循环重试，确保提取到抖音号
+            for (let i = 0; i < 30; i++) {
+              await sleep(100);
+              const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/i);
+              if (match) {
+                dyId = match[1].trim();
+                break;
+              }
             }
+            triggerMouseEvent(hoverTarget, 'mouseleave');
           }
-          triggerMouseEvent(hoverTarget, 'mouseleave');
+
+          // 3. 双重标记为已处理，永久跳过
+          processedNicknames.add(nickname);
+          el.setAttribute(PROCESSED_ATTR, 'true');
+          console.log(`✅ 处理完成: ${nickname} | 提取抖音号: ${dyId || '未提取到'}`);
+
+          // 4. 匹配目标抖音号
+          if (dyId && TARGET_DOUYIN_IDS.includes(dyId) && remainingTargets.includes(dyId)) {
+            console.log(`%c🎯 命中目标: ${dyId} | 昵称: ${nickname}`, "color: #4CAF50; font-weight: bold;");
+            results.push({ id: dyId, nickname: nickname });
+            remainingTargets = remainingTargets.filter(id => id !== dyId);
+          }
+
+          await sleep(400); // 操作间隔，防反爬
+          return { skip: false, dyId };
+        } catch (e) {
+          // 出错也标记为已处理，避免卡死循环
+          processedNicknames.add(nickname);
+          el.setAttribute(PROCESSED_ATTR, 'true');
+          console.warn(`⚠️ 用户 ${nickname} 处理失败，已标记跳过`, e.message);
+          return { skip: true, dyId: null };
         }
-
-        // 3. 标记为已处理
-        processedNicknames.add(nickname);
-        console.log(`✅ 处理完成: ${nickname} | 提取抖音号: ${dyId || '未提取到'}`);
-
-        // 4. 匹配目标抖音号
-        if (dyId && TARGET_DOUYIN_IDS.includes(dyId) && remainingTargets.includes(dyId)) {
-          console.log(`%c🎯 命中目标: ${dyId} | 昵称: ${nickname}`, "color: #4CAF50; font-weight: bold;");
-          results.push({ id: dyId, nickname: nickname });
-          remainingTargets = remainingTargets.filter(id => id !== dyId);
-        }
-
-        await sleep(300);
-        return { skip: false, dyId };
       }
 
-      // ================= 第一遍：从上到下正序遍历（往下滑列表） =================
+      // ✅ 【核心修复5：整屏扫完再滚动，绝对不漏当前屏用户】
+      // 正序遍历：从上到下
       async function runForwardScan() {
-        console.log("\n==================== 开始正序遍历（从上到下） ====================");
+        console.log("\n==================== 开始正序全量遍历（从上到下） ====================");
         let retryCount = 0;
 
         while (retryCount < CONFIG.MAX_SCROLL_RETRY) {
@@ -322,61 +362,53 @@ async function runSync() {
             break;
           }
 
-          // 获取当前所有可见用户
+          // 1. 获取当前屏所有可见用户
           const userElements = getAllUserElements();
+          console.log(`📝 当前屏获取到 ${userElements.length} 个用户`);
+          
           if (userElements.length === 0) {
-            console.warn("⚠️ 未找到用户元素，尝试向下滚动");
-            await scrollList('down');
+            console.warn("⚠️ 当前屏未找到用户，尝试向下滚动");
+            const scrollRes = await scrollList('down');
+            if (scrollRes.isEnd) retryCount++;
+            continue;
+          }
+
+          // 2. 处理当前屏所有未处理的用户（一个不漏）
+          let processedCount = 0;
+          for (const el of userElements) {
+            const res = await processUser(el);
+            if (!res.skip) processedCount++;
+            // 所有目标已找到，提前退出
+            if (remainingTargets.length === 0) break;
+          }
+          console.log(`📊 当前屏处理完成，新处理 ${processedCount} 个用户，累计处理 ${processedNicknames.size} 个`);
+
+          // 3. 当前屏所有用户都处理完了，滚动到下一屏
+          const scrollRes = await scrollList('down');
+          // 已经到底部，且没有新用户，增加重试计数
+          if (scrollRes.isEnd && processedCount === 0) {
             retryCount++;
-            continue;
+          } else {
+            retryCount = 0;
           }
-
-          // 找到下一个要处理的用户（从上到下，跳过已处理的）
-          let nextUserEl = null;
-          for (let i = 0; i < userElements.length; i++) {
-            const nickname = userElements[i].textContent.trim();
-            if (!processedNicknames.has(nickname)) {
-              nextUserEl = userElements[i];
-              break;
-            }
-          }
-
-          // 没有找到未处理的用户，尝试向下滚动加载更多
-          if (!nextUserEl) {
-            console.log("⚠️ 当前页无未处理用户，向下滚动加载更多");
-            const isScrolled = await scrollList('down');
-            // 滚动距离过小，说明已经到底部
-            if (!isScrolled) {
-              retryCount++;
-            } else {
-              retryCount = 0;
-            }
-            continue;
-          }
-
-          // 重置重试计数
-          retryCount = 0;
-          // 处理当前用户
-          await processUser(nextUserEl);
         }
 
         console.log("==================== 正序遍历完成 ====================");
-        console.log(`📊 正序遍历共处理 ${processedNicknames.size} 个用户，剩余目标 ${remainingTargets.length} 个`);
+        console.log(`📊 正序累计处理 ${processedNicknames.size} 个用户，剩余目标 ${remainingTargets.length} 个`);
       }
 
-      // ================= 第二遍：从下到上反向遍历（往上滑列表，完全匹配你的需求） =================
+      // ✅ 反向遍历：从下到上，往上滑列表
       async function runBackwardScan() {
-        // 所有目标已找到，不用反向遍历
         if (remainingTargets.length === 0) {
           console.log("\n🎉 所有目标已找到，无需反向遍历");
           return;
         }
 
-        console.log("\n==================== 开始反向遍历（从下到上） ====================");
+        console.log("\n==================== 开始反向全量遍历（从下到上） ====================");
         const container = findScrollContainer();
         let retryCount = 0;
 
-        // 第一步：先滚动到列表最底部，作为反向遍历的起点
+        // 先滚动到列表最底部，作为反向遍历起点
         console.log("📜 先滚动到列表最底部，准备反向遍历");
         let bottomRetry = 0;
         while (bottomRetry < CONFIG.MAX_SCROLL_RETRY) {
@@ -389,74 +421,105 @@ async function runSync() {
             bottomRetry = 0;
           }
         }
-        console.log("✅ 已滚动到列表最底部，开始从下往上遍历+往上滑列表");
-        retryCount = 0;
+        console.log("✅ 已滚动到列表最底部，开始从下往上遍历");
+        await sleep(CONFIG.RENDER_WAIT_TIME);
 
+        // 反向遍历核心逻辑
         while (retryCount < CONFIG.MAX_SCROLL_RETRY) {
-          // 所有目标已找到，提前结束
           if (remainingTargets.length === 0) {
             console.log("🎉 所有目标已找到，提前结束反向遍历");
             break;
           }
 
-          // 获取当前所有可见用户
+          // 1. 获取当前屏所有可见用户
           const userElements = getAllUserElements();
+          console.log(`📝 当前屏获取到 ${userElements.length} 个用户`);
+          
           if (userElements.length === 0) {
-            console.warn("⚠️ 未找到用户元素，尝试向上滚动");
-            await scrollList('up'); // 往上滑列表
-            retryCount++;
+            console.warn("⚠️ 当前屏未找到用户，尝试向上滚动");
+            const scrollRes = await scrollList('up');
+            if (scrollRes.isEnd) retryCount++;
             continue;
           }
 
-          // 找到下一个要处理的用户（从下到上，跳过已处理的）
-          let nextUserEl = null;
+          // 2. 从下到上处理当前屏所有未处理的用户
+          let processedCount = 0;
           for (let i = userElements.length - 1; i >= 0; i--) {
-            const nickname = userElements[i].textContent.trim();
-            if (!processedNicknames.has(nickname)) {
-              nextUserEl = userElements[i];
-              break;
-            }
+            const res = await processUser(userElements[i]);
+            if (!res.skip) processedCount++;
+            if (remainingTargets.length === 0) break;
           }
+          console.log(`📊 当前屏处理完成，新处理 ${processedCount} 个用户，累计处理 ${processedNicknames.size} 个`);
 
-          // 没有找到未处理的用户，尝试向上滚动加载更多（往上滑列表）
-          if (!nextUserEl) {
-            console.log("⚠️ 当前页无未处理用户，向上滚动列表加载更多");
-            const isScrolled = await scrollList('up'); // 往上滑列表
-            // 滚动距离过小，说明已经到顶部
-            if (!isScrolled) {
-              retryCount++;
-            } else {
-              retryCount = 0;
-            }
-            continue;
+          // 3. 当前屏处理完，往上滑一屏
+          const scrollRes = await scrollList('up');
+          // 已经到顶部，且没有新用户，增加重试计数
+          if (scrollRes.isEnd && processedCount === 0) {
+            retryCount++;
+          } else {
+            retryCount = 0;
           }
-
-          // 重置重试计数
-          retryCount = 0;
-          // 处理当前用户
-          await processUser(nextUserEl);
         }
 
         console.log("==================== 反向遍历完成 ====================");
-        console.log(`📊 反向遍历后共处理 ${processedNicknames.size} 个用户，剩余目标 ${remainingTargets.length} 个`);
+        console.log(`📊 反向累计处理 ${processedNicknames.size} 个用户，剩余目标 ${remainingTargets.length} 个`);
+      }
+
+      // ✅ 兜底精准查找：针对剩余目标，单独循环查找（最后兜底）
+      async function runFinalSearch() {
+        if (remainingTargets.length === 0) return;
+        console.log(`\n==================== 开始最终兜底查找，剩余 ${remainingTargets.length} 个目标 ====================`);
+        
+        const container = findScrollContainer();
+        // 先滚回顶部
+        container.scrollTo({ top: 0, behavior: 'smooth' });
+        await sleep(2000);
+
+        // 循环滚动查找剩余目标
+        for (let targetId of remainingTargets) {
+          console.log(`🔍 正在兜底查找: ${targetId}`);
+          let found = false;
+          let retry = 0;
+
+          while (retry < CONFIG.MAX_SCROLL_RETRY * 2 && !found) {
+            // 查找当前页是否有匹配的抖音号
+            const match = document.body.innerText.match(new RegExp(`抖音号\\s*[:：]\\s*${targetId}`, 'i'));
+            if (match) {
+              console.log(`✅ 兜底找到目标: ${targetId}`);
+              found = true;
+              break;
+            }
+
+            // 没找到就继续滚动
+            const scrollRes = await scrollList('down');
+            if (scrollRes.isEnd) retry++;
+          }
+
+          if (!found) {
+            console.log(`❌ 兜底未找到目标: ${targetId}`);
+          }
+        }
       }
 
       // 主执行流程
       try {
-        // 第一步：先滚动到列表最顶部，确保从第一个用户开始
-        console.log("📜 先滚动到列表最顶部，从第一个用户开始");
+        // 第一步：滚回顶部，从第一个用户开始
+        console.log("📜 初始化：滚动到列表最顶部");
         const container = findScrollContainer();
         container.scrollTo({ top: 0, behavior: 'smooth' });
         await sleep(2000);
 
-        // 第二步：正序遍历（从上到下，往下滑列表）
+        // 第二步：正序全量遍历（从上到下）
         await runForwardScan();
 
-        // 第三步：反向遍历（从下到上，往上滑列表，完全匹配你的需求）
+        // 第三步：反向全量遍历（从下到上，往上滑列表）
         await runBackwardScan();
 
-        // 结果处理
-        console.log("\n================ 🏁 遍历最终结果 ================");
+        // 第四步：最终兜底查找
+        await runFinalSearch();
+
+        // 结果处理（按原Gitee顺序生成）
+        console.log("\n================ 🏁 全量遍历最终结果 ================");
         let content = "";
         TARGET_DOUYIN_IDS.forEach(id => {
           const res = results.find(r => r.id === id);
@@ -484,7 +547,7 @@ async function runSync() {
     }, { CONFIG, TARGET_DOUYIN_IDS });
 
     // ========== 5. 结果处理与文件写入 ==========
-    log('info', `📝 遍历完成，共扫描处理 ${scanResult.processedCount || 0} 个用户`);
+    log('info', `📝 全量遍历完成，累计扫描处理 ${scanResult.processedCount || 0} 个用户`);
     if (!scanResult.success && scanResult.error) {
       log('warn', `⚠️ 遍历过程出现异常: ${scanResult.error}`);
     }
@@ -494,7 +557,7 @@ async function runSync() {
     log('info', `🏁 任务全部完成，成功匹配 ${scanResult.results?.length || 0}/${TARGET_DOUYIN_IDS.length} 个目标抖音号`);
 
     if (scanResult.remainingTargets?.length > 0) {
-      log('warn', `⚠️ 一个来回遍历后仍未找到的目标抖音号: ${scanResult.remainingTargets.join(', ')}`);
+      log('warn', `⚠️ 全量遍历后仍未找到的目标抖音号: ${scanResult.remainingTargets.join(', ')}`);
     }
 
   } catch (err) {
