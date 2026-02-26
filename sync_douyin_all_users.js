@@ -2,42 +2,42 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-// 固定配置：仅保留全量采集+JSON同步相关，与原douyinh.txt同仓库根目录
+// 固定配置：全量用户JSON同步到Gitee同仓库根目录
 const CONFIG = {
-  GITEE_JSON_URL: 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyin_all_users.json', // 全量用户JSON地址
-  LOCAL_USERS_JSON: 'douyin_all_users.json', // 本地全量JSON文件
+  GITEE_JSON_URL: 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyin_all_users.json',
+  LOCAL_USERS_JSON: 'douyin_all_users.json',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
   MAX_SCROLL_ATTEMPTS: 150,
   SCROLL_TOTAL_STEP: 600,
   SCROLL_STEP: 100,
   MAX_NO_NEW_USER_COUNT: 8,
-  PRE_SCRIPT_WAIT: 30000 // 脚本开始前等待30秒（手动兜底）
+  PRE_SCRIPT_WAIT: 30000
 };
-// 日志函数（增强版，带时间戳和颜色）
+// 日志函数（带时间戳+颜色）
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
-    info: '\x1b[36m',    // 青色
-    success: '\x1b[32m', // 绿色
-    warn: '\x1b[33m',    // 黄色
-    error: '\x1b[31m'    // 红色
+    info: '\x1b[36m',
+    success: '\x1b[32m',
+    warn: '\x1b[33m',
+    error: '\x1b[31m'
   };
   const reset = '\x1b[0m';
   const color = colors[level] || colors.info;
   console.log(`[${timestamp}] ${color}[${level.toUpperCase()}]${reset} ${msg}`, ...args);
 };
-// Gitee上传全量JSON文件方法（处理首次上传/更新冲突，复用原API逻辑）
+// Gitee上传JSON文件（处理首次上传/更新冲突）
 const uploadJsonToGitee = async (content, token) => {
   try {
     const base64Content = Buffer.from(content).toString('base64');
-    // 先获取文件sha（更新文件用，避免Gitee 409冲突）
+    // 获取文件sha（更新用，避免409冲突）
     const getRes = await axios.get(CONFIG.GITEE_JSON_URL, {
       params: { access_token: token },
       timeout: 20000
     });
     const sha = getRes.data.sha;
-    // 上传更新JSON
+    // 上传更新
     await axios.put(CONFIG.GITEE_JSON_URL, {
       access_token: token,
       content: base64Content,
@@ -76,7 +76,7 @@ async function runSync() {
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
     log('info', '✅ 等待结束，开始执行任务');
-    // ========== 1. 环境变量校验（仅保留Gitee Token + 抖音Cookie） ==========
+    // 1. 环境变量校验
     log('info', '🔍 开始校验环境变量...');
     const giteeToken = process.env.GITEE_TOKEN?.trim();
     const douyinCookies = process.env.DOUYIN_COOKIES?.trim();
@@ -89,7 +89,7 @@ async function runSync() {
       process.exit(1);
     }
     log('success', `✅ 环境变量读取完成，Gitee Token长度: ${giteeToken.length}`);
-    // ========== 2. 启动浏览器，注入Cookie（原封不动，反爬+免登） ==========
+    // 2. 启动浏览器，注入Cookie
     log('info', '🌐 正在启动无头浏览器...');
     browser = await chromium.launch({
       headless: true,
@@ -117,7 +117,7 @@ async function runSync() {
       Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
       window.chrome = { runtime: {} };
     });
-    // 解析并修复抖音Cookie格式
+    // 解析并修复抖音Cookie格式【核心修复：sameSite强制兜底合法值】
     let parsedCookies;
     try {
       parsedCookies = JSON.parse(douyinCookies);
@@ -126,12 +126,17 @@ async function runSync() {
       log('error', '❌ DOUYIN_COOKIES格式错误，必须是标准JSON字符串');
       process.exit(1);
     }
+    // 修复Cookie：强制sameSite为Strict/Lax/None，无则兜底Lax（彻底解决报错）
     const fixCookies = (rawCookies) => {
       return rawCookies.map(cookie => {
+        // 核心修复：处理sameSite，仅保留3个合法值，无则设为Lax
         if (cookie.sameSite) {
-          const ss = cookie.sameSite.toLowerCase();
-          cookie.sameSite = ss === 'lax' ? 'Lax' : ss === 'strict' ? 'Strict' : ss === 'none' ? 'None' : undefined;
+          const ss = cookie.sameSite.toLowerCase().trim();
+          cookie.sameSite = ss === 'strict' ? 'Strict' : ss === 'none' ? 'None' : 'Lax';
+        } else {
+          cookie.sameSite = 'Lax'; // 无sameSite字段，直接兜底合法值
         }
+        // 删掉Playwright不识别的字段
         delete cookie.storeId;
         delete cookie.hostOnly;
         delete cookie.session;
@@ -145,7 +150,7 @@ async function runSync() {
     page = await context.newPage();
     page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
     log('success', '✅ 浏览器启动完成');
-    // ========== 3. 进入抖音创作者私信页，验证登录 ==========
+    // 3. 进入抖音创作者私信页，验证登录
     log('info', '🌐 正在进入抖音创作者中心私信页面...');
     await page.goto(CONFIG.CREATOR_CHAT_URL, {
       waitUntil: 'domcontentloaded',
@@ -167,7 +172,7 @@ async function runSync() {
       state: 'attached'
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，初始化选中状态');
-    // ========== 4. 首元素点击（兜底，解决虚拟列表加载问题） ==========
+    // 4. 首元素点击（兜底，解决虚拟列表加载问题）
     await page.evaluate(() => {
       window.scrollTo(0, 0);
       const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items') || document.scrollingElement;
@@ -181,10 +186,10 @@ async function runSync() {
     await firstNicknameLocator.click({ force: true, timeout: 10000 });
     await page.waitForTimeout(2000);
     log('success', '✅ 初始化完成，开始全量滚动采集所有用户');
-    // ========== 5. 核心：全量滚动采集（提取所有用户的头像+抖音号+昵称） ==========
+    // 5. 核心：全量滚动采集（提取所有用户的头像+抖音号+昵称）
     const scanResult = await page.evaluate(async (CONFIG) => {
-      const allUsers = []; // 存储所有用户数据
-      const processedDouyinIds = new Set(); // 按抖音号去重（比昵称精准）
+      const allUsers = [];
+      const processedDouyinIds = new Set();
       const PROCESSED_ATTR = 'data-user-processed';
       let noNewUserCount = 0;
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -197,7 +202,7 @@ async function runSync() {
           clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2
         }));
       }
-      // 查找“查看Ta的主页”元素（提取抖音号用）
+      // 查找“查看Ta的主页”元素
       function findHoverTarget() {
         const elements = document.querySelectorAll('span, div');
         for (const el of elements) {
@@ -218,7 +223,7 @@ async function runSync() {
         }
         return document.scrollingElement || document.documentElement;
       }
-      // 滚动加载更多用户（模拟人工滚轮）
+      // 滚动加载更多用户
       async function scrollDouyinList() {
         const container = findScrollContainer();
         const beforeScrollTop = container.scrollTop;
@@ -238,7 +243,6 @@ async function runSync() {
       try {
         const container = findScrollContainer();
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
-          // 获取所有未处理的用户昵称元素
           const allNameElements = Array.from(document.querySelectorAll(
             'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], [class*="user-item"] span'
           ));
@@ -247,11 +251,10 @@ async function runSync() {
             return nickname && !el.hasAttribute(PROCESSED_ATTR);
           });
           if (unprocessedElements.length === 0) {
-            // 无新用户，滚动加载
             noNewUserCount++;
             const isScrolled = await scrollDouyinList();
             if (!isScrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) {
-              break; // 滚动到底部，停止遍历
+              break;
             }
             continue;
           }
@@ -264,11 +267,11 @@ async function runSync() {
             await sleep(100);
             el.click({ force: true });
             await sleep(1500);
-            // 1. 提取头像链接【核心】
+            // 提取头像链接
             const avatarEl = el.closest('[class*="user-item"], div[class*="chat-item"], [class*="msg-item"]')
               ?.querySelector('img[class*="avatar"], div[class*="avatar"] img, [src*="avatar"]');
             const avatar = avatarEl ? avatarEl.src : '未获取到';
-            // 2. 提取抖音号
+            // 提取抖音号
             let douyinId = '未获取到';
             const hoverTarget = findHoverTarget();
             if (hoverTarget) {
@@ -285,12 +288,11 @@ async function runSync() {
               }
               triggerMouseEvent(hoverTarget, 'mouseleave');
             }
-            // 去重：抖音号唯一则加入
+            // 去重后加入列表
             if (!processedDouyinIds.has(douyinId) && douyinId !== '未获取到') {
               processedDouyinIds.add(douyinId);
               allUsers.push({ avatar, douyinId, nickname });
             } else if (douyinId === '未获取到') {
-              // 抖音号未提取到，按昵称兜底（标记去重）
               const nickKey = `nick_${nickname}`;
               if (!processedDouyinIds.has(nickKey)) {
                 processedDouyinIds.add(nickKey);
@@ -306,8 +308,8 @@ async function runSync() {
         }
         return {
           success: true,
-          allUsers, // 全量用户数据
-          processedCount: allUsers.length // 采集总数
+          allUsers,
+          processedCount: allUsers.length
         };
       } catch (error) {
         return {
@@ -318,7 +320,7 @@ async function runSync() {
         };
       }
     }, CONFIG);
-    // ========== 6. 结果处理：生成本地JSON + 同步到Gitee ==========
+    // 6. 结果处理：生成本地JSON + 同步到Gitee
     if (!scanResult.success) {
       log('error', `⚠️ 采集过程出现异常: ${scanResult.error}`);
     }
