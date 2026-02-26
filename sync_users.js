@@ -155,8 +155,8 @@ async function runSync() {
       timeout: CONFIG.GOTO_TIMEOUT
     });
 
-    log('info', '⏳ 页面加载后等待10秒，确保内容渲染...');
-    await page.waitForTimeout(10000);
+    log('info', '⏳ 页面加载后等待20秒，确保内容渲染...');
+    await page.waitForTimeout(20000);
     const currentUrl = page.url();
     log('info', `当前页面URL: ${currentUrl}`);
     if (currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl.includes('verify')) {
