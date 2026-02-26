@@ -3,7 +3,7 @@ name: 抖音私信全量用户采集-同步Gitee
 on:
   workflow_dispatch: # 手动触发（核心，推荐）
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0/10 * * * *'
 
 # 任务配置
 jobs:
