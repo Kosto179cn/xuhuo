@@ -32,7 +32,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版+首元素点击优化）');
+    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版+首元素点击最终修复）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT)); // 脚本开始前等待30秒
     log('info', '✅ 等待结束，开始执行任务');
@@ -155,32 +155,25 @@ async function runSync() {
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，准备点击第一个昵称');
 
-    // ================= 核心修复：点击第一个昵称（解决可视区域外问题） =================
+    // ================= 最终修复：点击第一个昵称（舍弃错误XPath，改用locator稳定定位） =================
     log('info', '👉 开始定位并点击第一个昵称元素，初始化选中状态');
-    // 兜底：先将页面和列表滚动到顶部，避免元素偏移
+    // 兜底：先将页面和抖音列表滚动到顶部，避免元素偏移
     await page.evaluate(() => {
       window.scrollTo(0, 0);
       const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items') || document.scrollingElement;
       if (scrollContainer) scrollContainer.scrollTop = 0;
     });
-    await page.waitForTimeout(500);
-    // 等待第一个昵称元素加载，确保句柄有效
-    const firstNicknameEl = await page.waitForSelector(
-      'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span',
-      { timeout: 30000, state: 'attached' }
-    );
-    // 滚动元素到可视区域（居中），解决outside viewport
-    await firstNicknameEl.scrollIntoViewIfNeeded({ block: 'center', inline: 'center' });
+    await page.waitForTimeout(800);
+
+    // 核心：用locator定位第一个匹配的昵称元素（Playwright原生方法，无语法错误）
+    const firstNicknameLocator = page.locator('span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span').first();
+    // 等待元素可操作
+    await firstNicknameLocator.waitFor({ state: 'attached', timeout: 30000 });
+    // 滚动元素到可视区域（居中，解决outside viewport）
+    await firstNicknameLocator.scrollIntoViewIfNeeded({ block: 'center', inline: 'center' });
     await page.waitForTimeout(1000);
-    // 精准XPath点击第一个元素，强制点击+内部坐标，避免无效点击
-    await page.click(
-      'xpath=//*[self::span or self::div][contains(@class,"name") or @data-testid*="nickname" or @data-testid*="user-name" or (ancestor::*[contains(@class,"user-item")] and self::span)][1]',
-      {
-        force: true,
-        timeout: 10000,
-        position: { x: 10, y: 10 }
-      }
-    );
+    // 强制点击（忽略元素状态、可视区域）
+    await firstNicknameLocator.click({ force: true, timeout: 10000 });
     await page.waitForTimeout(2000);
     log('success', '✅ 第一个昵称元素点击完成，开始执行全量遍历');
     // ================= 首元素点击逻辑结束 =================
