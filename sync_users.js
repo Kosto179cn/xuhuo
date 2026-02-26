@@ -13,17 +13,17 @@ const CONFIG = {
   SCROLL_TOTAL_STEP: 600,
   SCROLL_STEP: 100,
   MAX_NO_NEW_USER_COUNT: 8,
-  PRE_SCRIPT_WAIT: 30000 // 新增：脚本开始前等待30秒
+  PRE_SCRIPT_WAIT: 30000 // 脚本启动前30秒等待
 };
 
-// 日志函数（增强版，带时间戳和颜色）
+// 日志函数（带时间戳+颜色，清晰区分）
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
-    info: '\x1b[36m',    // 青色
-    success: '\x1b[32m', // 绿色
-    warn: '\x1b[33m',    // 黄色
-    error: '\x1b[31m'    // 红色
+    info: '\x1b[36m',
+    success: '\x1b[32m',
+    warn: '\x1b[33m',
+    error: '\x1b[31m'
   };
   const reset = '\x1b[0m';
   const color = colors[level] || colors.info;
@@ -35,9 +35,9 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版）');
+    log('info', '🚀 启动抖音用户同步脚本（全量日志排查版）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
-    await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT)); // 脚本开始前等待30秒
+    await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
     log('info', '✅ 等待结束，开始执行任务');
 
     // ========== 1. 环境变量校验 ==========
@@ -45,11 +45,11 @@ async function runSync() {
     const giteeToken = process.env.GITEE_TOKEN?.trim();
     const douyinCookies = process.env.DOUYIN_COOKIES?.trim();
     if (!giteeToken) {
-      log('error', '❌ 未读取到GITEE_TOKEN，请检查GitHub Secrets配置');
+      log('error', '❌ 未读取到GITEE_TOKEN，请检查Secrets配置');
       process.exit(1);
     }
     if (!douyinCookies) {
-      log('error', '❌ 未读取到DOUYIN_COOKIES，请检查GitHub Secrets配置');
+      log('error', '❌ 未读取到DOUYIN_COOKIES，请检查Secrets配置');
       process.exit(1);
     }
     log('success', `✅ 环境变量读取完成，Gitee Token长度: ${giteeToken.length}`);
@@ -81,7 +81,7 @@ async function runSync() {
       process.exit(1);
     }
     log('success', `✅ 成功拉取到${TARGET_DOUYIN_IDS.length}个目标抖音号`);
-    log('info', `目标抖音号列表: ${TARGET_DOUYIN_IDS.join(', ')}`);
+    log('info', `【完整目标抖音号列表】: ${TARGET_DOUYIN_IDS.join(', ')}`);
 
     // ========== 3. 启动浏览器，注入Cookie ==========
     log('info', '🌐 正在启动无头浏览器...');
@@ -144,9 +144,10 @@ async function runSync() {
     log('success', '✅ Cookie注入完成');
 
     page = await context.newPage();
+    // 【关键新增】转发页面内的console日志到控制台，确保能看到遍历细节
+    page.on('console', msg => log('info', `[页面内日志] ${msg.text()}`));
     page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
-    // 移除了网络收发日志的监听
-    log('success', '✅ 浏览器启动完成');
+    log('success', '✅ 浏览器启动完成，页面日志转发已开启');
 
     // ========== 4. 页面加载 ==========
     log('info', '🌐 正在进入抖音创作者中心私信页面...');
@@ -171,7 +172,7 @@ async function runSync() {
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
 
-    // ================= 【核心修复：全量滚动+全量匹配逻辑】 =================
+    // ================= 【核心：全量日志遍历逻辑】 =================
     const scanResult = await page.evaluate(async (params) => {
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
@@ -195,15 +196,16 @@ async function runSync() {
       }
 
       function findHoverTarget() {
-        console.log('🔍 正在查找“查看Ta的主页”元素...');
-        const elements = document.querySelectorAll('span, div');
+        console.log('🔍 正在查找「查看Ta的主页」元素...');
+        const elements = document.querySelectorAll('span, div, a');
         for (const el of elements) {
-          if (el.textContent.trim() === '查看Ta的主页') {
-            console.log('✅ 找到“查看Ta的主页”元素');
+          const text = el.textContent.trim();
+          if (text === '查看Ta的主页') {
+            console.log('✅ 找到「查看Ta的主页」元素');
             return el;
           }
         }
-        console.log('❌ 未找到“查看Ta的主页”元素');
+        console.log('❌ 未找到「查看Ta的主页」元素');
         return null;
       }
 
@@ -266,20 +268,26 @@ async function runSync() {
         console.log(`✅ 锁定滚动容器，容器高度: ${container.scrollHeight}`);
 
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
-          console.log(`\n🔄 第 ${attempt + 1} 轮遍历 | 已处理: ${processedNicknames.size} | 剩余目标: ${remainingTargets.length}`);
+          console.log(`\n========== 第 ${attempt + 1} 轮遍历开始 ==========`);
+          console.log(`📊 当前进度：已处理 ${processedNicknames.size} 个用户 | 剩余目标 ${remainingTargets.length} 个`);
           
           const allNameElements = Array.from(document.querySelectorAll(
             'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span'
           ));
-          console.log(`📝 页面共找到 ${allNameElements.length} 个昵称元素`);
+          console.log(`📝 当前页面共找到 ${allNameElements.length} 个昵称元素`);
+          
+          // 【关键新增】打印当前页所有昵称，确认有没有目标用户
+          const currentPageNicknames = allNameElements.map(el => el.textContent.trim()).filter(n => n && n.length>1);
+          console.log(`📋 当前页所有昵称: ${currentPageNicknames.join(' | ')}`);
           
           const unprocessedElements = allNameElements.filter(el => {
             const nickname = el.textContent.trim();
             return nickname && nickname.length > 1 && !processedNicknames.has(nickname) && !el.hasAttribute(PROCESSED_ATTR);
           });
 
-          console.log(`📝 当前页找到 ${unprocessedElements.length} 个未处理用户`);
+          console.log(`📝 当前页未处理用户数量: ${unprocessedElements.length}`);
 
+          // 无新用户，执行滚动
           if (unprocessedElements.length === 0) {
             console.log("⚠️ 当前页无未处理用户，执行滚动加载更多");
             noNewUserCount++;
@@ -292,29 +300,32 @@ async function runSync() {
             continue;
           }
 
+          // 重置无新用户计数
           noNewUserCount = 0;
 
+          // 挨个处理未查看用户
           for (const el of unprocessedElements) {
             const nickname = el.textContent.trim();
             if (processedNicknames.has(nickname) || el.hasAttribute(PROCESSED_ATTR)) continue;
 
-            console.log(`👤 正在查看用户: ${nickname}`);
+            console.log(`\n👤 开始处理用户: ${nickname}`);
             el.scrollIntoView({ block: "center", behavior: "auto" });
             await sleep(100);
             el.click({ force: true });
             await sleep(1500);
 
+            // 提取抖音号
             const hoverTarget = findHoverTarget();
             let dyId = null;
             if (hoverTarget) {
-              console.log('🔥 触发“查看Ta的主页”弹窗...');
+              console.log('🔥 触发「查看Ta的主页」弹窗...');
               hoverTarget.scrollIntoView({ block: "center" });
               triggerMouseEvent(hoverTarget, 'mousemove');
               await sleep(50);
               triggerMouseEvent(hoverTarget, 'mouseenter');
               triggerMouseEvent(hoverTarget, 'mouseover');
 
-              console.log('⏳ 开始提取抖音号...');
+              console.log('⏳ 开始循环提取抖音号...');
               for (let i = 0; i < 20; i++) {
                 await sleep(100);
                 const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
@@ -323,25 +334,32 @@ async function runSync() {
                   console.log(`✅ 第 ${i + 1} 次尝试成功，提取到抖音号: ${dyId}`);
                   break;
                 }
-                console.log(`⏳ 第 ${i + 1} 次尝试提取抖音号...`);
+                console.log(`⏳ 第 ${i + 1} 次尝试未提取到抖音号`);
               }
               triggerMouseEvent(hoverTarget, 'mouseleave');
-            } else {
-              console.log('❌ 未找到“查看Ta的主页”元素，跳过提取');
             }
 
+            // 标记为已处理
             processedNicknames.add(nickname);
             el.setAttribute(PROCESSED_ATTR, 'true');
-            console.log(`✅ 已标记用户: ${nickname} | 提取抖音号: ${dyId || '未提取到'}`);
+            console.log(`✅ 完成用户处理: ${nickname} | 最终提取抖音号: ${dyId || '未提取到'}`);
 
-            if (dyId && TARGET_DOUYIN_IDS.includes(dyId) && remainingTargets.includes(dyId)) {
-              console.log(`🎯 命中目标: ${dyId} | 昵称: ${nickname}`);
+            // 【关键新增】检查当前用户是否命中目标
+            const isTargetId = dyId && TARGET_DOUYIN_IDS.includes(dyId);
+            const isTargetNickname = TARGET_DOUYIN_IDS.some(id => id.includes(nickname) || nickname.includes(id));
+            console.log(`🔍 目标匹配检查：抖音号是否命中 ${isTargetId ? '是' : '否'} | 昵称是否命中 ${isTargetNickname ? '是' : '否'}`);
+
+            // 命中目标则加入结果
+            if (isTargetId && remainingTargets.includes(dyId)) {
+              console.log(`🎯 成功命中目标用户！抖音号: ${dyId} | 昵称: ${nickname}`);
               results.push({ id: dyId, nickname: nickname });
               remainingTargets = remainingTargets.filter(id => id !== dyId);
+              console.log(`📊 剩余未命中目标: ${remainingTargets.join(', ')}`);
             }
 
+            // 所有目标找到，提前终止
             if (remainingTargets.length === 0) {
-              console.log("🎉 所有目标抖音号已找到，提前结束遍历");
+              console.log("🎉 所有目标抖音号已全部找到，提前结束遍历");
               break;
             }
             await sleep(300);
@@ -349,11 +367,19 @@ async function runSync() {
 
           if (remainingTargets.length === 0) break;
 
-          console.log("📥 当前页所有用户处理完毕，滚动加载更多");
+          console.log("📥 当前页所有用户处理完毕，滚动加载下一页");
           await scrollDouyinList();
         }
 
+        // 结果处理
         console.log("\n================ 🏁 遍历最终结果 ================");
+        console.log(`✅ 总处理用户数: ${processedNicknames.size}`);
+        console.log(`🎯 成功命中目标数: ${results.length}`);
+        console.log(`❌ 未命中目标数: ${remainingTargets.length}`);
+        if (remainingTargets.length > 0) {
+          console.log(`⚠️ 未找到的目标抖音号: ${remainingTargets.join(', ')}`);
+        }
+
         let content = "";
         TARGET_DOUYIN_IDS.forEach(id => {
           const res = results.find(r => r.id === id);
@@ -365,7 +391,8 @@ async function runSync() {
           results,
           content: content.trim(),
           remainingTargets,
-          processedCount: processedNicknames.size
+          processedCount: processedNicknames.size,
+          allProcessedNicknames: Array.from(processedNicknames) // 【新增】返回所有处理过的昵称
         };
 
       } catch (error) {
@@ -374,14 +401,17 @@ async function runSync() {
           success: false,
           error: error.message,
           content: TARGET_DOUYIN_IDS.join('\n').trim(),
-          remainingTargets,
-          processedCount: processedNicknames.size
+          remainingTargets: TARGET_DOUYIN_IDS,
+          processedCount: processedNicknames.size,
+          allProcessedNicknames: Array.from(processedNicknames)
         };
       }
     }, { CONFIG, TARGET_DOUYIN_IDS });
 
     // ========== 5. 结果处理 ==========
     log('info', `📝 遍历完成，共扫描处理 ${scanResult.processedCount || 0} 个用户`);
+    log('info', `📋 所有已处理的用户昵称: ${scanResult.allProcessedNicknames?.join(' | ') || '无'}`);
+    
     if (!scanResult.success && scanResult.error) {
       log('warn', `⚠️ 遍历过程出现异常: ${scanResult.error}`);
     }
