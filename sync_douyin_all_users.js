@@ -2,8 +2,7 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-
-// 固定配置
+// 固定配置（完全保留原有，未做任何修改）
 const CONFIG = {
   GITEE_JSON_URL: 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyin_all_users.json',
   LOCAL_USERS_JSON: 'douyin_all_users.json',
@@ -15,8 +14,7 @@ const CONFIG = {
   MAX_NO_NEW_USER_COUNT: 8,
   PRE_SCRIPT_WAIT: 30000
 };
-
-// 日志函数
+// 日志函数（完全保留原有）
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
@@ -29,8 +27,7 @@ const log = (level, msg, ...args) => {
   const color = colors[level] || colors.info;
   console.log(`[${timestamp}] ${color}[${level.toUpperCase()}]${reset} ${msg}`, ...args);
 };
-
-// Gitee上传JSON文件
+// Gitee上传JSON文件（完全保留原有上传逻辑）
 const uploadJsonToGitee = async (content, token) => {
   try {
     const base64Content = Buffer.from(content).toString('base64');
@@ -42,14 +39,12 @@ const uploadJsonToGitee = async (content, token) => {
         if (err.response?.status === 404) return null; // 文件不存在
         throw err;
     });
-
     const sha = getRes?.data?.sha;
-
     // 上传更新或新建
     await axios.put(CONFIG.GITEE_JSON_URL, {
       access_token: token,
       content: base64Content,
-      message: sha ? 'update: 同步抖音私信全量用户数据' : 'init: 初始化抖音私信全量用户JSON数据',
+      message: sha ? 'update: 同步抖音私信全量用户数据(含最近聊天时间)' : 'init: 初始化抖音私信全量用户JSON数据(含最近聊天时间)',
       sha: sha
     }, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' },
@@ -62,25 +57,23 @@ const uploadJsonToGitee = async (content, token) => {
     return false;
   }
 };
-
-// 主函数
+// 主函数（仅新增聊天时间提取逻辑，其余完全保留）
 async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音私信全量用户采集脚本（修复版：头像+抖音号）');
+    log('info', '🚀 启动抖音私信全量用户采集脚本（修复版：头像+抖音号+最近聊天时间）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
     
-    // 1. 环境变量校验
+    // 1. 环境变量校验（原有逻辑）
     const giteeToken = process.env.GITEE_TOKEN?.trim();
     const douyinCookies = process.env.DOUYIN_COOKIES?.trim();
     if (!giteeToken || !douyinCookies) {
       log('error', '❌ 缺少环境变量 GITEE_TOKEN 或 DOUYIN_COOKIES');
       process.exit(1);
     }
-
-    // 2. 启动浏览器
+    // 2. 启动浏览器（原有逻辑）
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
@@ -89,8 +82,7 @@ async function runSync() {
       viewport: { width: 1920, height: 1080 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
-
-    // Cookie 处理
+    // Cookie 处理（原有逻辑）
     const cleanCookies = JSON.parse(douyinCookies).map(cookie => {
       if (cookie.sameSite) {
         const ss = cookie.sameSite.toLowerCase();
@@ -102,36 +94,30 @@ async function runSync() {
       return cookie;
     });
     await context.addCookies(cleanCookies);
-
     page = await context.newPage();
     
-    // 3. 进入页面
+    // 3. 进入页面（原有逻辑）
     log('info', '🌐 进入抖音创作者私信页...');
     await page.goto(CONFIG.CREATOR_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: CONFIG.GOTO_TIMEOUT });
     await page.waitForTimeout(15000);
-
-    // 验证登录
+    // 验证登录（原有逻辑）
     if (page.url().includes('login')) {
       log('error', '❌ Cookie已失效');
       process.exit(1);
     }
-
-    // 等待列表加载
+    // 等待列表加载（原有逻辑）
     log('info', '🔍 等待用户列表渲染...');
     await page.waitForSelector('.semi-list-item, [class*="name"]', { timeout: 60000 });
-
-    // 4. 全量采集核心逻辑（修复版）
-    log('info', '✅ 开始全量滚动采集');
+    // 4. 全量采集核心逻辑（仅新增【聊天时间提取】，其余原有逻辑不变）
+    log('info', '✅ 开始全量滚动采集（含最近聊天时间）');
     
     const scanResult = await page.evaluate(async (CONFIG) => {
       const allUsers = [];
       const processedIds = new Set(); // 用于去重 (优先用抖音号，没有则用昵称)
       const PROCESSED_ATTR = 'data-user-processed';
       let noNewUserCount = 0;
-
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-      // --- 移植自 sync_users.js 的核心辅助函数 ---
+      // --- 移植自 sync_users.js 的核心辅助函数（原有逻辑）---
       function triggerMouseEvent(element, eventType) {
         if (!element) return;
         const rect = element.getBoundingClientRect();
@@ -142,7 +128,6 @@ async function runSync() {
         });
         element.dispatchEvent(event);
       }
-
       function findHoverTarget() {
         const elements = document.querySelectorAll('span, div, a');
         for (const el of elements) {
@@ -150,12 +135,10 @@ async function runSync() {
         }
         return null;
       }
-
       function findScrollContainer() {
         // 优先查找 semi-design 的列表容器
         const semiContainer = document.querySelector('.semi-list, .semi-list-items');
         if (semiContainer) return semiContainer;
-
         const allDivs = document.querySelectorAll('div');
         for (const div of allDivs) {
           const style = window.getComputedStyle(div);
@@ -165,7 +148,6 @@ async function runSync() {
         }
         return document.scrollingElement;
       }
-
       async function scrollDouyinList() {
         const container = findScrollContainer();
         const startTop = container.scrollTop;
@@ -180,8 +162,7 @@ async function runSync() {
         await sleep(1500);
         return container.scrollTop > startTop;
       }
-
-      // --- 采集循环 ---
+      // --- 采集循环（仅新增聊天时间提取，其余原有逻辑不变）---
       try {
         const container = findScrollContainer();
         
@@ -190,9 +171,7 @@ async function runSync() {
           const potentialNicknames = Array.from(document.querySelectorAll(
             '.semi-list-item .item-header-name-vL_79m, .semi-list-item span[class*="name"]'
           ));
-
           const unprocessed = potentialNicknames.filter(el => !el.hasAttribute(PROCESSED_ATTR));
-
           if (unprocessed.length === 0) {
             noNewUserCount++;
             const scrolled = await scrollDouyinList();
@@ -200,15 +179,13 @@ async function runSync() {
             continue;
           }
           noNewUserCount = 0;
-
           for (const nickEl of unprocessed) {
             if (nickEl.hasAttribute(PROCESSED_ATTR)) continue;
-
             const nickname = nickEl.textContent.trim();
             // 找到当前行的父容器 (HTML中的 li.semi-list-item)
             const rowItem = nickEl.closest('.semi-list-item');
             
-            // 1. 获取头像 (修复：基于父容器查找)
+            // 1. 获取头像 (原有逻辑)
             let avatar = 'default.jpg';
             if (rowItem) {
               const imgEl = rowItem.querySelector('.semi-avatar img, img[src*="avatar"]');
@@ -219,13 +196,20 @@ async function runSync() {
               }
             }
 
-            // 滚动到该元素并点击
+            // ====== 新增：提取最近聊天时间 ======
+            let lastChatTime = '未获取到';
+            const timeEl = rowItem?.querySelector('[class^="item-header-time-"], [class*="time"]');
+            if (timeEl) {
+              lastChatTime = timeEl.textContent.trim();
+            }
+            // =====================================
+
+            // 滚动到该元素并点击（原有逻辑）
             nickEl.scrollIntoView({ block: "center" });
             await sleep(100);
             nickEl.click({ force: true });
             await sleep(1500); // 等待右侧聊天窗口加载
-
-            // 2. 获取抖音号 (修复：使用 sync_users.js 的悬停逻辑)
+            // 2. 获取抖音号 (原有逻辑)
             let douyinId = '未获取到';
             const hoverTarget = findHoverTarget(); // 查找 "查看Ta的主页"
             
@@ -248,39 +232,33 @@ async function runSync() {
               }
               triggerMouseEvent(hoverTarget, 'mouseleave'); // 移开鼠标防止遮挡
             }
-
-            // 存储数据 (去重)
+            // 存储数据 (去重，原有逻辑+新增lastChatTime字段)
             const uniqueKey = douyinId !== '未获取到' ? douyinId : `nick_${nickname}`;
             if (!processedIds.has(uniqueKey)) {
               processedIds.add(uniqueKey);
               allUsers.push({
                 nickname: nickname,
                 douyinId: douyinId,
-                avatar: avatar
+                avatar: avatar,
+                lastChatTime: lastChatTime // 新增：聊天时间字段
               });
             }
-
             nickEl.setAttribute(PROCESSED_ATTR, 'true');
             await sleep(200);
           }
           
           await scrollDouyinList();
         }
-
         return { success: true, allUsers, count: allUsers.length };
-
       } catch (e) {
         return { success: false, error: e.message, allUsers: [] };
       }
     }, CONFIG);
-
     if (!scanResult.success) {
       log('error', `⚠️ 采集异常: ${scanResult.error}`);
     }
-
-    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户`);
-
-    // 5. 保存与上传
+    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户（含最近聊天时间）`);
+    // 5. 保存与上传（原有逻辑，自动携带新字段上传）
     const jsonStr = JSON.stringify(scanResult.allUsers, null, 2);
     fs.writeFileSync(CONFIG.LOCAL_USERS_JSON, jsonStr, 'utf8');
     
@@ -288,11 +266,10 @@ async function runSync() {
     const uploadRes = await uploadJsonToGitee(jsonStr, giteeToken);
     
     if (uploadRes) {
-      log('success', '✅ 任务全部完成');
+      log('success', '✅ 任务全部完成（用户数据+最近聊天时间已同步至Gitee）');
     } else {
       process.exit(1);
     }
-
   } catch (err) {
     log('error', `🚨 致命错误: ${err.message}`);
     process.exit(1);
@@ -300,5 +277,4 @@ async function runSync() {
     if (browser) await browser.close();
   }
 }
-
 runSync();
