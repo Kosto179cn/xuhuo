@@ -152,4 +152,153 @@ async function runSync() {
       }
 
       function findScrollContainer() {
-        // 优先查找 sem
+        // 优先查找 semi-design 的列表容器
+        const semiContainer = document.querySelector('.semi-list, .semi-list-items');
+        if (semiContainer) return semiContainer;
+
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+          const style = window.getComputedStyle(div);
+          if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && div.scrollHeight > div.clientHeight) {
+            return div;
+          }
+        }
+        return document.scrollingElement;
+      }
+
+      async function scrollDouyinList() {
+        const container = findScrollContainer();
+        const startTop = container.scrollTop;
+        const steps = CONFIG.SCROLL_TOTAL_STEP / CONFIG.SCROLL_STEP;
+        
+        for (let i = 0; i < steps; i++) {
+          container.scrollTop += CONFIG.SCROLL_STEP;
+          await sleep(50);
+        }
+        // 模拟键盘 PageDown 以触发懒加载
+        container.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+        await sleep(1500);
+        return container.scrollTop > startTop;
+      }
+
+      // --- 采集循环 ---
+      try {
+        const container = findScrollContainer();
+        
+        for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
+          // 查找所有昵称元素 (对应 HTML 中的 .item-header-name-vL_79m)
+          const potentialNicknames = Array.from(document.querySelectorAll(
+            '.semi-list-item .item-header-name-vL_79m, .semi-list-item span[class*="name"]'
+          ));
+
+          const unprocessed = potentialNicknames.filter(el => !el.hasAttribute(PROCESSED_ATTR));
+
+          if (unprocessed.length === 0) {
+            noNewUserCount++;
+            const scrolled = await scrollDouyinList();
+            if (!scrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) break;
+            continue;
+          }
+          noNewUserCount = 0;
+
+          for (const nickEl of unprocessed) {
+            if (nickEl.hasAttribute(PROCESSED_ATTR)) continue;
+
+            const nickname = nickEl.textContent.trim();
+            // 找到当前行的父容器 (HTML中的 li.semi-list-item)
+            const rowItem = nickEl.closest('.semi-list-item');
+            
+            // 1. 获取头像 (修复：基于父容器查找)
+            let avatar = 'default.jpg';
+            if (rowItem) {
+              const imgEl = rowItem.querySelector('.semi-avatar img, img[src*="avatar"]');
+              if (imgEl && imgEl.src) {
+                avatar = imgEl.src;
+                // 修复相对协议
+                if (avatar.startsWith('//')) avatar = 'https:' + avatar;
+              }
+            }
+
+            // 滚动到该元素并点击
+            nickEl.scrollIntoView({ block: "center" });
+            await sleep(100);
+            nickEl.click({ force: true });
+            await sleep(1500); // 等待右侧聊天窗口加载
+
+            // 2. 获取抖音号 (修复：使用 sync_users.js 的悬停逻辑)
+            let douyinId = '未获取到';
+            const hoverTarget = findHoverTarget(); // 查找 "查看Ta的主页"
+            
+            if (hoverTarget) {
+              // 模拟完整的鼠标交互序列
+              triggerMouseEvent(hoverTarget, 'mousemove');
+              await sleep(50);
+              triggerMouseEvent(hoverTarget, 'mouseenter');
+              await sleep(50);
+              triggerMouseEvent(hoverTarget, 'mouseover');
+              
+              // 循环检测弹窗内容
+              for (let k = 0; k < 15; k++) {
+                await sleep(150);
+                const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
+                if (match) {
+                  douyinId = match[1].trim();
+                  break;
+                }
+              }
+              triggerMouseEvent(hoverTarget, 'mouseleave'); // 移开鼠标防止遮挡
+            }
+
+            // 存储数据 (去重)
+            const uniqueKey = douyinId !== '未获取到' ? douyinId : `nick_${nickname}`;
+            if (!processedIds.has(uniqueKey)) {
+              processedIds.add(uniqueKey);
+              allUsers.push({
+                nickname: nickname,
+                douyinId: douyinId,
+                avatar: avatar
+              });
+            }
+
+            nickEl.setAttribute(PROCESSED_ATTR, 'true');
+            await sleep(200);
+          }
+          
+          await scrollDouyinList();
+        }
+
+        return { success: true, allUsers, count: allUsers.length };
+
+      } catch (e) {
+        return { success: false, error: e.message, allUsers: [] };
+      }
+    }, CONFIG);
+
+    if (!scanResult.success) {
+      log('error', `⚠️ 采集异常: ${scanResult.error}`);
+    }
+
+    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户`);
+
+    // 5. 保存与上传
+    const jsonStr = JSON.stringify(scanResult.allUsers, null, 2);
+    fs.writeFileSync(CONFIG.LOCAL_USERS_JSON, jsonStr, 'utf8');
+    
+    log('info', '📤 同步到 Gitee...');
+    const uploadRes = await uploadJsonToGitee(jsonStr, giteeToken);
+    
+    if (uploadRes) {
+      log('success', '✅ 任务全部完成');
+    } else {
+      process.exit(1);
+    }
+
+  } catch (err) {
+    log('error', `🚨 致命错误: ${err.message}`);
+    process.exit(1);
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
+runSync();
