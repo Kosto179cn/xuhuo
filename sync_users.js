@@ -9,14 +9,13 @@ const CONFIG = {
   LOCAL_USERS_FILE: 'users.txt',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
-  MAX_SCROLL_ATTEMPTS: 150,
-  SCROLL_TOTAL_STEP: 600,
-  SCROLL_STEP: 100,
-  MAX_NO_NEW_USER_COUNT: 8,
-  PRE_SCRIPT_WAIT: 30000 // 脚本启动前30秒等待
+  MAX_SCROLL_ATTEMPTS: 200, // 加大轮次，确保扫完
+  SCROLL_STEP: 800, // 加大步长，避免原地打转
+  MAX_NO_NEW_USER_COUNT: 12, // 放宽终止条件
+  PRE_SCRIPT_WAIT: 30000
 };
 
-// 日志函数（带时间戳+颜色，清晰区分）
+// 日志函数
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
@@ -35,7 +34,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（全量日志排查版）');
+    log('info', '🚀 启动抖音用户同步脚本（滚动修复+全量日志版）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
     log('info', '✅ 等待结束，开始执行任务');
@@ -144,7 +143,6 @@ async function runSync() {
     log('success', '✅ Cookie注入完成');
 
     page = await context.newPage();
-    // 【关键新增】转发页面内的console日志到控制台，确保能看到遍历细节
     page.on('console', msg => log('info', `[页面内日志] ${msg.text()}`));
     page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
     log('success', '✅ 浏览器启动完成，页面日志转发已开启');
@@ -152,12 +150,12 @@ async function runSync() {
     // ========== 4. 页面加载 ==========
     log('info', '🌐 正在进入抖音创作者中心私信页面...');
     await page.goto(CONFIG.CREATOR_CHAT_URL, {
-      waitUntil: 'domcontentloaded',
+      waitUntil: 'networkidle', // 改成networkidle，确保页面完全加载
       timeout: CONFIG.GOTO_TIMEOUT
     });
 
-    log('info', '⏳ 页面加载后等待10秒，确保内容渲染...');
-    await page.waitForTimeout(10000);
+    log('info', '⏳ 页面加载后等待15秒，确保列表完全渲染...');
+    await page.waitForTimeout(15000);
     const currentUrl = page.url();
     log('info', `当前页面URL: ${currentUrl}`);
     if (currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl.includes('verify')) {
@@ -165,19 +163,26 @@ async function runSync() {
       process.exit(1);
     }
 
+    // 【关键修复】优先切换到「全部私信」标签，确保在完整列表里
+    log('info', '🔍 正在切换到「全部私信」标签...');
+    await page.click('div[role="tab"]:has-text("全部私信")', { force: true }).catch(() => {
+      log('warn', '⚠️ 未找到「全部私信」标签，使用当前列表');
+    });
+    await page.waitForTimeout(2000);
+
     log('info', '🔍 等待用户列表元素出现...');
-    await page.waitForSelector('span[class*="name"], div[class*="name"], [class*="user-item"]', {
+    await page.waitForSelector('div[class*="conversation-item"], [class*="user-item"], span[class*="name"]', {
       timeout: 60000,
       state: 'attached'
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
 
-    // ================= 【核心：全量日志遍历逻辑】 =================
+    // ================= 【核心修复：滚动+遍历逻辑】 =================
     const scanResult = await page.evaluate(async (params) => {
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
       const results = [];
-      const processedNicknames = new Set();
+      const processedIds = new Set(); // 【修复】用元素唯一ID去重，不再只用昵称
       const PROCESSED_ATTR = 'data-user-processed';
       let remainingTargets = [...TARGET_DOUYIN_IDS];
       let noNewUserCount = 0;
@@ -209,23 +214,33 @@ async function runSync() {
         return null;
       }
 
+      // 【关键修复】精准查找私信列表滚动容器
       function findScrollContainer() {
-        console.log('🔍 正在查找滚动容器...');
-        let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+        console.log('🔍 正在查找私信列表滚动容器...');
+        // 优先级1：抖音私信列表专属容器
+        let container = document.querySelector('.conversation-list, .chat-list, [class*="message-list"], [class*="conversation-wrapper"]');
+        if (container) {
+          console.log('✅ 找到私信列表专属容器');
+          return container;
+        }
+
+        // 优先级2：虚拟列表容器
+        container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
         if (container) {
           console.log('✅ 找到虚拟列表容器');
           return container;
         }
 
+        // 优先级3：通用可滚动容器
         const allDivs = document.querySelectorAll('div');
         for (const div of allDivs) {
           const style = window.getComputedStyle(div);
           const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
           const isTall = div.clientHeight > window.innerHeight * 0.6;
-          const hasUserItems = div.querySelector('[class*="name"], [class*="user"], [class*="message"]');
-          const isLongList = div.scrollHeight > div.clientHeight + 100;
+          const hasUserItems = div.querySelector('[class*="name"], [class*="user-item"], [class*="conversation-item"]');
+          const isLongList = div.scrollHeight > div.clientHeight + 200;
           if (isScrollable && isTall && hasUserItems && isLongList) {
-            console.log('✅ 找到自定义滚动容器');
+            console.log('✅ 找到通用可滚动容器');
             return div;
           }
         }
@@ -234,67 +249,78 @@ async function runSync() {
         return document.scrollingElement || document.documentElement;
       }
 
-      async function scrollDouyinList() {
-        const container = findScrollContainer();
+      // 【关键修复】重写滚动逻辑，确保触发虚拟列表加载
+      async function scrollDouyinList(container) {
         const beforeScrollTop = container.scrollTop;
-        console.log(`📜 执行滚动，当前滚动位置: ${beforeScrollTop}, 容器总高度: ${container.scrollHeight}`);
+        const beforeScrollHeight = container.scrollHeight;
+        console.log(`📜 执行滚动，当前位置: ${beforeScrollTop}, 列表总高度: ${beforeScrollHeight}`);
 
-        const stepCount = CONFIG.SCROLL_TOTAL_STEP / CONFIG.SCROLL_STEP;
-        for (let j = 0; j < stepCount; j++) {
-          container.dispatchEvent(new WheelEvent('wheel', {
-            deltaY: CONFIG.SCROLL_STEP,
-            bubbles: true,
-            cancelable: true,
-            composed: true
-          }));
-          container.scrollTop += CONFIG.SCROLL_STEP;
-          await sleep(50);
-        }
+        // 方式1：直接滚动到底部附近，触发加载
+        container.scrollTop = container.scrollHeight - container.clientHeight - 200;
+        await sleep(100);
 
-        container.scrollTo({ top: container.scrollTop + CONFIG.SCROLL_TOTAL_STEP, behavior: 'smooth' });
+        // 方式2：模拟滚轮事件，触发React渲染
+        container.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: CONFIG.SCROLL_STEP,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        }));
+
+        // 方式3：PageDown按键兜底
         container.dispatchEvent(new KeyboardEvent('keydown', {
           key: 'PageDown', code: 'PageDown', keyCode: 34, which: 34, bubbles: true
         }));
 
-        await sleep(2000);
+        await sleep(2500); // 给足够时间加载新数据
         const afterScrollTop = container.scrollTop;
-        console.log(`📜 滚动完成，新滚动位置: ${afterScrollTop}, 滚动距离: ${afterScrollTop - beforeScrollTop}`);
+        const afterScrollHeight = container.scrollHeight;
+        console.log(`📜 滚动完成，新位置: ${afterScrollTop}, 新列表高度: ${afterScrollHeight}`);
         
-        return Math.abs(afterScrollTop - beforeScrollTop) > 20;
+        // 返回是否真的加载了新内容
+        return afterScrollHeight > beforeScrollHeight || Math.abs(afterScrollTop - beforeScrollTop) > 100;
       }
 
       try {
         const container = findScrollContainer();
-        console.log(`✅ 锁定滚动容器，容器高度: ${container.scrollHeight}`);
+        console.log(`✅ 锁定最终滚动容器，容器高度: ${container.scrollHeight}`);
 
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
           console.log(`\n========== 第 ${attempt + 1} 轮遍历开始 ==========`);
-          console.log(`📊 当前进度：已处理 ${processedNicknames.size} 个用户 | 剩余目标 ${remainingTargets.length} 个`);
+          console.log(`📊 当前进度：已处理 ${processedIds.size} 个用户 | 剩余目标 ${remainingTargets.length} 个`);
           
-          const allNameElements = Array.from(document.querySelectorAll(
-            'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span'
+          // 【修复】优先找完整的用户条目，而不是单独的昵称
+          const allUserItems = Array.from(document.querySelectorAll(
+            'div[class*="conversation-item"], [class*="user-item"], [class*="message-item"]'
           ));
-          console.log(`📝 当前页面共找到 ${allNameElements.length} 个昵称元素`);
+          console.log(`📝 当前页面共找到 ${allUserItems.length} 个用户条目`);
           
-          // 【关键新增】打印当前页所有昵称，确认有没有目标用户
-          const currentPageNicknames = allNameElements.map(el => el.textContent.trim()).filter(n => n && n.length>1);
-          console.log(`📋 当前页所有昵称: ${currentPageNicknames.join(' | ')}`);
-          
-          const unprocessedElements = allNameElements.filter(el => {
-            const nickname = el.textContent.trim();
-            return nickname && nickname.length > 1 && !processedNicknames.has(nickname) && !el.hasAttribute(PROCESSED_ATTR);
+          // 从用户条目里提取昵称元素
+          const unprocessedItems = allUserItems.filter(item => {
+            const nameEl = item.querySelector('span[class*="name"], div[class*="name"], span[data-testid*="nickname"]');
+            const nickname = nameEl?.textContent?.trim();
+            // 用条目本身的唯一标识去重，避免重名误判
+            const itemId = item.getAttribute('data-id') || item.getAttribute('data-conversation-id') || nickname;
+            return nickname && nickname.length > 1 && itemId && !processedIds.has(itemId) && !item.hasAttribute(PROCESSED_ATTR);
           });
 
-          console.log(`📝 当前页未处理用户数量: ${unprocessedElements.length}`);
+          console.log(`📝 当前页未处理用户数量: ${unprocessedItems.length}`);
+
+          // 【修复】打印当前页所有昵称，确认有没有目标用户
+          const currentPageNicknames = unprocessedItems.map(item => {
+            const nameEl = item.querySelector('span[class*="name"], div[class*="name"]');
+            return nameEl?.textContent?.trim() || '未知昵称';
+          });
+          console.log(`📋 当前页未处理用户昵称: ${currentPageNicknames.join(' | ')}`);
 
           // 无新用户，执行滚动
-          if (unprocessedElements.length === 0) {
+          if (unprocessedItems.length === 0) {
             console.log("⚠️ 当前页无未处理用户，执行滚动加载更多");
             noNewUserCount++;
             
-            const isScrolled = await scrollDouyinList();
-            if (!isScrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) {
-              console.log("🚫 已无法滚动到新内容，列表已到底部，停止遍历");
+            const hasNewContent = await scrollDouyinList(container);
+            if (!hasNewContent || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) {
+              console.log("🚫 已无法加载新内容，列表已到底部，停止遍历");
               break;
             }
             continue;
@@ -304,15 +330,18 @@ async function runSync() {
           noNewUserCount = 0;
 
           // 挨个处理未查看用户
-          for (const el of unprocessedElements) {
-            const nickname = el.textContent.trim();
-            if (processedNicknames.has(nickname) || el.hasAttribute(PROCESSED_ATTR)) continue;
+          for (const item of unprocessedItems) {
+            const nameEl = item.querySelector('span[class*="name"], div[class*="name"]');
+            const nickname = nameEl?.textContent?.trim();
+            const itemId = item.getAttribute('data-id') || item.getAttribute('data-conversation-id') || nickname;
+            
+            if (!nickname || processedIds.has(itemId) || item.hasAttribute(PROCESSED_ATTR)) continue;
 
             console.log(`\n👤 开始处理用户: ${nickname}`);
-            el.scrollIntoView({ block: "center", behavior: "auto" });
+            item.scrollIntoView({ block: "center", behavior: "auto" });
             await sleep(100);
-            el.click({ force: true });
-            await sleep(1500);
+            item.click({ force: true });
+            await sleep(2000); // 延长等待时间，确保页面跳转完成
 
             // 提取抖音号
             const hoverTarget = findHoverTarget();
@@ -321,12 +350,12 @@ async function runSync() {
               console.log('🔥 触发「查看Ta的主页」弹窗...');
               hoverTarget.scrollIntoView({ block: "center" });
               triggerMouseEvent(hoverTarget, 'mousemove');
-              await sleep(50);
+              await sleep(100);
               triggerMouseEvent(hoverTarget, 'mouseenter');
               triggerMouseEvent(hoverTarget, 'mouseover');
 
               console.log('⏳ 开始循环提取抖音号...');
-              for (let i = 0; i < 20; i++) {
+              for (let i = 0; i < 30; i++) { // 增加循环次数
                 await sleep(100);
                 const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
                 if (match) {
@@ -340,11 +369,11 @@ async function runSync() {
             }
 
             // 标记为已处理
-            processedNicknames.add(nickname);
-            el.setAttribute(PROCESSED_ATTR, 'true');
+            processedIds.add(itemId);
+            item.setAttribute(PROCESSED_ATTR, 'true');
             console.log(`✅ 完成用户处理: ${nickname} | 最终提取抖音号: ${dyId || '未提取到'}`);
 
-            // 【关键新增】检查当前用户是否命中目标
+            // 目标匹配检查
             const isTargetId = dyId && TARGET_DOUYIN_IDS.includes(dyId);
             const isTargetNickname = TARGET_DOUYIN_IDS.some(id => id.includes(nickname) || nickname.includes(id));
             console.log(`🔍 目标匹配检查：抖音号是否命中 ${isTargetId ? '是' : '否'} | 昵称是否命中 ${isTargetNickname ? '是' : '否'}`);
@@ -368,12 +397,12 @@ async function runSync() {
           if (remainingTargets.length === 0) break;
 
           console.log("📥 当前页所有用户处理完毕，滚动加载下一页");
-          await scrollDouyinList();
+          await scrollDouyinList(container);
         }
 
         // 结果处理
         console.log("\n================ 🏁 遍历最终结果 ================");
-        console.log(`✅ 总处理用户数: ${processedNicknames.size}`);
+        console.log(`✅ 总处理用户数: ${processedIds.size}`);
         console.log(`🎯 成功命中目标数: ${results.length}`);
         console.log(`❌ 未命中目标数: ${remainingTargets.length}`);
         if (remainingTargets.length > 0) {
@@ -391,8 +420,8 @@ async function runSync() {
           results,
           content: content.trim(),
           remainingTargets,
-          processedCount: processedNicknames.size,
-          allProcessedNicknames: Array.from(processedNicknames) // 【新增】返回所有处理过的昵称
+          processedCount: processedIds.size,
+          allProcessedNicknames: Array.from(processedIds)
         };
 
       } catch (error) {
@@ -402,15 +431,15 @@ async function runSync() {
           error: error.message,
           content: TARGET_DOUYIN_IDS.join('\n').trim(),
           remainingTargets: TARGET_DOUYIN_IDS,
-          processedCount: processedNicknames.size,
-          allProcessedNicknames: Array.from(processedNicknames)
+          processedCount: processedIds.size,
+          allProcessedNicknames: Array.from(processedIds)
         };
       }
     }, { CONFIG, TARGET_DOUYIN_IDS });
 
     // ========== 5. 结果处理 ==========
     log('info', `📝 遍历完成，共扫描处理 ${scanResult.processedCount || 0} 个用户`);
-    log('info', `📋 所有已处理的用户昵称: ${scanResult.allProcessedNicknames?.join(' | ') || '无'}`);
+    log('info', `📋 所有已处理的用户标识: ${scanResult.allProcessedNicknames?.join(' | ') || '无'}`);
     
     if (!scanResult.success && scanResult.error) {
       log('warn', `⚠️ 遍历过程出现异常: ${scanResult.error}`);
