@@ -2,8 +2,8 @@ name: 🔗 Gitee同步 - 抖音ID转昵称
 
 on:
   schedule:
-    # 每小时执行一次
-    - cron: '0 * * * *'
+    # ⏰ 修改点：每30分钟执行一次
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       mode:
