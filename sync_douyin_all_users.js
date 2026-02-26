@@ -2,8 +2,7 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-
-// 固定配置
+// 固定配置：全量用户JSON同步到Gitee同仓库根目录
 const CONFIG = {
   GITEE_JSON_URL: 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyin_all_users.json',
   LOCAL_USERS_JSON: 'douyin_all_users.json',
@@ -15,8 +14,7 @@ const CONFIG = {
   MAX_NO_NEW_USER_COUNT: 8,
   PRE_SCRIPT_WAIT: 30000
 };
-
-// 日志函数
+// 日志函数（带时间戳+颜色）
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
@@ -29,27 +27,21 @@ const log = (level, msg, ...args) => {
   const color = colors[level] || colors.info;
   console.log(`[${timestamp}] ${color}[${level.toUpperCase()}]${reset} ${msg}`, ...args);
 };
-
-// Gitee上传JSON文件
+// Gitee上传JSON文件（处理首次上传/更新冲突）
 const uploadJsonToGitee = async (content, token) => {
   try {
     const base64Content = Buffer.from(content).toString('base64');
-    // 获取文件sha（更新用）
+    // 获取文件sha（更新用，避免409冲突）
     const getRes = await axios.get(CONFIG.GITEE_JSON_URL, {
       params: { access_token: token },
       timeout: 20000
-    }).catch(err => {
-        if (err.response?.status === 404) return null; // 文件不存在
-        throw err;
     });
-
-    const sha = getRes?.data?.sha;
-
-    // 上传更新或新建
+    const sha = getRes.data.sha;
+    // 上传更新
     await axios.put(CONFIG.GITEE_JSON_URL, {
       access_token: token,
       content: base64Content,
-      message: sha ? 'update: 同步抖音私信全量用户数据' : 'init: 初始化抖音私信全量用户JSON数据',
+      message: 'update: 同步抖音私信全量用户数据（头像+抖音号+昵称+最近聊天时间）',
       sha: sha
     }, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' },
@@ -57,248 +49,309 @@ const uploadJsonToGitee = async (content, token) => {
     });
     return true;
   } catch (err) {
+    // 首次上传（文件不存在，无sha）
+    if (err.response?.status === 404) {
+      const base64Content = Buffer.from(content).toString('base64');
+      await axios.put(CONFIG.GITEE_JSON_URL, {
+        access_token: token,
+        content: base64Content,
+        message: 'init: 初始化抖音私信全量用户JSON数据（含最近聊天时间）'
+      }, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' },
+        timeout: 30000
+      });
+      return true;
+    }
     log('error', `❌ Gitee JSON上传失败: ${err.message}`);
-    if (err.response) log('error', `   响应: ${JSON.stringify(err.response.data)}`);
+    err.response && log('error', `   状态码: ${err.response.status}, 响应: ${JSON.stringify(err.response.data)}`);
     return false;
   }
 };
-
-// 主函数
+// 主函数：全量采集私信所有用户
 async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音私信全量用户采集脚本（修复版：头像+抖音号）');
-    log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒...`);
+    log('info', '🚀 启动抖音私信全量用户采集脚本（头像+抖音号+昵称+最近聊天时间）');
+    log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
-    
+    log('info', '✅ 等待结束，开始执行任务');
     // 1. 环境变量校验
+    log('info', '🔍 开始校验环境变量...');
     const giteeToken = process.env.GITEE_TOKEN?.trim();
     const douyinCookies = process.env.DOUYIN_COOKIES?.trim();
-    if (!giteeToken || !douyinCookies) {
-      log('error', '❌ 缺少环境变量 GITEE_TOKEN 或 DOUYIN_COOKIES');
+    if (!giteeToken) {
+      log('error', '❌ 未读取到GITEE_TOKEN，请检查GitHub Secrets配置');
       process.exit(1);
     }
-
-    // 2. 启动浏览器
+    if (!douyinCookies) {
+      log('error', '❌ 未读取到DOUYIN_COOKIES，请检查GitHub Secrets配置');
+      process.exit(1);
+    }
+    log('success', `✅ 环境变量读取完成，Gitee Token长度: ${giteeToken.length}`);
+    // 2. 启动浏览器，注入Cookie
+    log('info', '🌐 正在启动无头浏览器...');
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding'
+      ]
     });
     const context = await browser.newContext({
       viewport: { width: 1920, height: 1080 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      ignoreHTTPSErrors: true,
+      javaScriptEnabled: true
     });
-
-    // Cookie 处理
-    const cleanCookies = JSON.parse(douyinCookies).map(cookie => {
-      if (cookie.sameSite) {
-        const ss = cookie.sameSite.toLowerCase();
-        cookie.sameSite = ['strict', 'lax', 'none'].includes(ss) ? ss.charAt(0).toUpperCase() + ss.slice(1) : 'Lax';
-      } else {
-        cookie.sameSite = 'Lax';
-      }
-      delete cookie.storeId; delete cookie.hostOnly; delete cookie.session;
-      return cookie;
+    // 隐藏浏览器指纹，绕过抖音反爬
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+      window.chrome = { runtime: {} };
     });
-    await context.addCookies(cleanCookies);
-
-    page = await context.newPage();
-    
-    // 3. 进入页面
-    log('info', '🌐 进入抖音创作者私信页...');
-    await page.goto(CONFIG.CREATOR_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: CONFIG.GOTO_TIMEOUT });
-    await page.waitForTimeout(15000);
-
-    // 验证登录
-    if (page.url().includes('login')) {
-      log('error', '❌ Cookie已失效');
+    // 解析并修复抖音Cookie格式【核心修复：sameSite强制兜底合法值】
+    let parsedCookies;
+    try {
+      parsedCookies = JSON.parse(douyinCookies);
+      log('info', `✅ 成功解析Cookie，共 ${parsedCookies.length} 条`);
+    } catch (err) {
+      log('error', '❌ DOUYIN_COOKIES格式错误，必须是标准JSON字符串');
       process.exit(1);
     }
-
-    // 等待列表加载
-    log('info', '🔍 等待用户列表渲染...');
-    await page.waitForSelector('.semi-list-item, [class*="name"]', { timeout: 60000 });
-
-    // 4. 全量采集核心逻辑（修复版）
-    log('info', '✅ 开始全量滚动采集');
-    
+    // 修复Cookie：强制sameSite为Strict/Lax/None，无则兜底Lax（彻底解决报错）
+    const fixCookies = (rawCookies) => {
+      return rawCookies.map(cookie => {
+        // 核心修复：处理sameSite，仅保留3个合法值，无则设为Lax
+        if (cookie.sameSite) {
+          const ss = cookie.sameSite.toLowerCase().trim();
+          cookie.sameSite = ss === 'strict' ? 'Strict' : ss === 'none' ? 'None' : 'Lax';
+        } else {
+          cookie.sameSite = 'Lax'; // 无sameSite字段，直接兜底合法值
+        }
+        // 删掉Playwright不识别的字段
+        delete cookie.storeId;
+        delete cookie.hostOnly;
+        delete cookie.session;
+        return cookie;
+      });
+    };
+    const cleanCookies = fixCookies(parsedCookies);
+    await context.addCookies(cleanCookies);
+    log('success', '✅ Cookie注入完成');
+    // 新建页面并监听错误
+    page = await context.newPage();
+    page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
+    log('success', '✅ 浏览器启动完成');
+    // 3. 进入抖音创作者私信页，验证登录
+    log('info', '🌐 正在进入抖音创作者中心私信页面...');
+    await page.goto(CONFIG.CREATOR_CHAT_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: CONFIG.GOTO_TIMEOUT
+    });
+    log('info', '⏳ 页面加载后等待20秒，确保内容渲染...');
+    await page.waitForTimeout(20000);
+    const currentUrl = page.url();
+    log('info', `当前页面URL: ${currentUrl}`);
+    // 验证Cookie是否有效（未登录/验证则退出）
+    if (currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl.includes('verify')) {
+      log('error', '❌ Cookie已失效/触发人机验证，请重新获取抖音Cookie');
+      process.exit(1);
+    }
+    // 等待用户列表元素渲染
+    log('info', '🔍 等待用户列表元素出现...');
+    await page.waitForSelector('span[class*="name"], div[class*="name"], [class*="user-item"]', {
+      timeout: 60000,
+      state: 'attached'
+    });
+    log('success', '✅ 页面加载完成，用户列表已渲染，初始化选中状态');
+    // 4. 首元素点击（兜底，解决虚拟列表加载问题）
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items') || document.scrollingElement;
+      if (scrollContainer) scrollContainer.scrollTop = 0;
+    });
+    await page.waitForTimeout(800);
+    const firstNicknameLocator = page.locator('span[class*="name"], div[class*="name"], [class*="user-item"] span').first();
+    await firstNicknameLocator.waitFor({ state: 'attached', timeout: 30000 });
+    await firstNicknameLocator.scrollIntoViewIfNeeded({ block: 'center' });
+    await page.waitForTimeout(1000);
+    await firstNicknameLocator.click({ force: true, timeout: 10000 });
+    await page.waitForTimeout(2000);
+    log('success', '✅ 初始化完成，开始全量滚动采集所有用户');
+    // 5. 核心：全量滚动采集（提取所有用户的头像+抖音号+昵称）
     const scanResult = await page.evaluate(async (CONFIG) => {
       const allUsers = [];
-      const processedIds = new Set(); // 用于去重 (优先用抖音号，没有则用昵称)
+      const processedDouyinIds = new Set();
       const PROCESSED_ATTR = 'data-user-processed';
       let noNewUserCount = 0;
-
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-      // --- 移植自 sync_users.js 的核心辅助函数 ---
+      // 触发鼠标事件（模拟人工）
       function triggerMouseEvent(element, eventType) {
         if (!element) return;
         const rect = element.getBoundingClientRect();
-        const event = new MouseEvent(eventType, {
+        element.dispatchEvent(new MouseEvent(eventType, {
           bubbles: true, cancelable: true, view: window,
-          clientX: rect.left + rect.width / 2,
-          clientY: rect.top + rect.height / 2
-        });
-        element.dispatchEvent(event);
+          clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2
+        }));
       }
-
+      // 查找“查看Ta的主页”元素
       function findHoverTarget() {
-        const elements = document.querySelectorAll('span, div, a');
+        const elements = document.querySelectorAll('span, div');
         for (const el of elements) {
           if (el.textContent.trim() === '查看Ta的主页') return el;
         }
         return null;
       }
-
+      // 查找私信列表滚动容器（适配抖音虚拟列表）
       function findScrollContainer() {
-        // 优先查找 semi-design 的列表容器
-        const semiContainer = document.querySelector('.semi-list, .semi-list-items');
-        if (semiContainer) return semiContainer;
-
+        let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
+        if (container) return container;
         const allDivs = document.querySelectorAll('div');
         for (const div of allDivs) {
           const style = window.getComputedStyle(div);
-          if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && div.scrollHeight > div.clientHeight) {
-            return div;
-          }
+          const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+          const hasUserItems = div.querySelector('[class*="name"], [class*="user"]');
+          if (isScrollable && hasUserItems && div.scrollHeight > div.clientHeight + 100) return div;
         }
-        return document.scrollingElement;
+        return document.scrollingElement || document.documentElement;
       }
-
+      // 滚动加载更多用户
       async function scrollDouyinList() {
         const container = findScrollContainer();
-        const startTop = container.scrollTop;
-        const steps = CONFIG.SCROLL_TOTAL_STEP / CONFIG.SCROLL_STEP;
-        
-        for (let i = 0; i < steps; i++) {
+        const beforeScrollTop = container.scrollTop;
+        const stepCount = CONFIG.SCROLL_TOTAL_STEP / CONFIG.SCROLL_STEP;
+        for (let j = 0; j < stepCount; j++) {
+          container.dispatchEvent(new WheelEvent('wheel', { deltaY: CONFIG.SCROLL_STEP, bubbles: true }));
           container.scrollTop += CONFIG.SCROLL_STEP;
           await sleep(50);
         }
-        // 模拟键盘 PageDown 以触发懒加载
+        container.scrollTo({ top: container.scrollTop + CONFIG.SCROLL_TOTAL_STEP, behavior: 'smooth' });
         container.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
-        await sleep(1500);
-        return container.scrollTop > startTop;
+        await sleep(2000);
+        const afterScrollTop = container.scrollTop;
+        return Math.abs(afterScrollTop - beforeScrollTop) > 20;
       }
-
-      // --- 采集循环 ---
+      // 开始全量遍历
       try {
         const container = findScrollContainer();
-        
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
-          // 查找所有昵称元素 (对应 HTML 中的 .item-header-name-vL_79m)
-          const potentialNicknames = Array.from(document.querySelectorAll(
-            '.semi-list-item .item-header-name-vL_79m, .semi-list-item span[class*="name"]'
+          const allNameElements = Array.from(document.querySelectorAll(
+            'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], [class*="user-item"] span'
           ));
-
-          const unprocessed = potentialNicknames.filter(el => !el.hasAttribute(PROCESSED_ATTR));
-
-          if (unprocessed.length === 0) {
+          const unprocessedElements = allNameElements.filter(el => {
+            const nickname = el.textContent.trim();
+            return nickname && !el.hasAttribute(PROCESSED_ATTR);
+          });
+          if (unprocessedElements.length === 0) {
             noNewUserCount++;
-            const scrolled = await scrollDouyinList();
-            if (!scrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) break;
+            const isScrolled = await scrollDouyinList();
+            if (!isScrolled || noNewUserCount >= CONFIG.MAX_NO_NEW_USER_COUNT) {
+              break;
+            }
             continue;
           }
           noNewUserCount = 0;
-
-          for (const nickEl of unprocessed) {
-            if (nickEl.hasAttribute(PROCESSED_ATTR)) continue;
-
-            const nickname = nickEl.textContent.trim();
-            // 找到当前行的父容器 (HTML中的 li.semi-list-item)
-            const rowItem = nickEl.closest('.semi-list-item');
-            
-            // 1. 获取头像 (修复：基于父容器查找)
-            let avatar = 'default.jpg';
-            if (rowItem) {
-              const imgEl = rowItem.querySelector('.semi-avatar img, img[src*="avatar"]');
-              if (imgEl && imgEl.src) {
-                avatar = imgEl.src;
-                // 修复相对协议
-                if (avatar.startsWith('//')) avatar = 'https:' + avatar;
-              }
-            }
-
-            // 滚动到该元素并点击
-            nickEl.scrollIntoView({ block: "center" });
+          // 遍历处理每个未处理用户
+          for (const el of unprocessedElements) {
+            const nickname = el.textContent.trim();
+            if (el.hasAttribute(PROCESSED_ATTR)) continue;
+            el.scrollIntoView({ block: "center" });
             await sleep(100);
-            nickEl.click({ force: true });
-            await sleep(1500); // 等待右侧聊天窗口加载
-
-            // 2. 获取抖音号 (修复：使用 sync_users.js 的悬停逻辑)
+            el.click({ force: true });
+            await sleep(1500);
+            // 提取头像链接
+            const userItemEl = el.closest('[class*="user-item"], div[class*="chat-item"], [class*="msg-item"], li[class*="list-item"]');
+            const avatarEl = userItemEl?.querySelector('img[class*="avatar"], div[class*="avatar"] img, [src*="avatar"]');
+            const avatar = avatarEl ? avatarEl.src : '未获取到';
+            // 提取最近聊天时间（类名混淆，用前缀匹配）
+            let lastChatTime = '未获取到';
+            const timeEl = userItemEl?.querySelector('[class^="item-header-time-"], [class*="time"]');
+            if (timeEl) {
+              lastChatTime = timeEl.textContent.trim();
+            }
+            // 提取抖音号
             let douyinId = '未获取到';
-            const hoverTarget = findHoverTarget(); // 查找 "查看Ta的主页"
-            
+            const hoverTarget = findHoverTarget();
             if (hoverTarget) {
-              // 模拟完整的鼠标交互序列
-              triggerMouseEvent(hoverTarget, 'mousemove');
-              await sleep(50);
               triggerMouseEvent(hoverTarget, 'mouseenter');
-              await sleep(50);
-              triggerMouseEvent(hoverTarget, 'mouseover');
-              
-              // 循环检测弹窗内容
-              for (let k = 0; k < 15; k++) {
-                await sleep(150);
+              await sleep(100);
+              // 多次尝试提取（避免渲染延迟）
+              for (let i = 0; i < 20; i++) {
+                await sleep(100);
                 const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
                 if (match) {
                   douyinId = match[1].trim();
                   break;
                 }
               }
-              triggerMouseEvent(hoverTarget, 'mouseleave'); // 移开鼠标防止遮挡
+              triggerMouseEvent(hoverTarget, 'mouseleave');
             }
-
-            // 存储数据 (去重)
-            const uniqueKey = douyinId !== '未获取到' ? douyinId : `nick_${nickname}`;
-            if (!processedIds.has(uniqueKey)) {
-              processedIds.add(uniqueKey);
-              allUsers.push({
-                nickname: nickname,
-                douyinId: douyinId,
-                avatar: avatar
-              });
+            // 去重后加入列表（只添加获取到抖音号的用户，未知用户跳过不上传）
+            if (!processedDouyinIds.has(douyinId) && douyinId !== '未获取到') {
+              processedDouyinIds.add(douyinId);
+              allUsers.push({ avatar, douyinId, nickname, lastChatTime });
             }
-
-            nickEl.setAttribute(PROCESSED_ATTR, 'true');
-            await sleep(200);
+            // 抖音号未获取到的用户直接跳过，不加入上传列表
+            // 标记为已处理
+            el.setAttribute(PROCESSED_ATTR, 'true');
+            await sleep(300);
           }
-          
+          // 本页处理完，滚动加载下一页
           await scrollDouyinList();
         }
-
-        return { success: true, allUsers, count: allUsers.length };
-
-      } catch (e) {
-        return { success: false, error: e.message, allUsers: [] };
+        return {
+          success: true,
+          allUsers,
+          processedCount: allUsers.length
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error.message,
+          allUsers: [],
+          processedCount: 0
+        };
       }
     }, CONFIG);
-
+    // 6. 结果处理：生成本地JSON + 同步到Gitee
     if (!scanResult.success) {
-      log('error', `⚠️ 采集异常: ${scanResult.error}`);
+      log('error', `⚠️ 采集过程出现异常: ${scanResult.error}`);
     }
-
-    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户`);
-
-    // 5. 保存与上传
-    const jsonStr = JSON.stringify(scanResult.allUsers, null, 2);
-    fs.writeFileSync(CONFIG.LOCAL_USERS_JSON, jsonStr, 'utf8');
-    
-    log('info', '📤 同步到 Gitee...');
-    const uploadRes = await uploadJsonToGitee(jsonStr, giteeToken);
-    
-    if (uploadRes) {
-      log('success', '✅ 任务全部完成');
+    const totalCount = scanResult.processedCount;
+    log('info', `📝 全量采集完成，共获取 ${totalCount} 个抖音私信用户（已去重）`);
+    // 生成格式化JSON
+    const userJsonStr = JSON.stringify(scanResult.allUsers, null, 2);
+    fs.writeFileSync(CONFIG.LOCAL_USERS_JSON, userJsonStr, 'utf8');
+    log('success', `✅ 本地JSON文件生成完成: ${CONFIG.LOCAL_USERS_JSON}`);
+    // 同步JSON到Gitee
+    log('info', '📤 正在将全量用户JSON同步到Gitee...');
+    const uploadSuccess = await uploadJsonToGitee(userJsonStr, giteeToken);
+    if (uploadSuccess) {
+      log('success', `✅ 全量用户数据已成功同步到Gitee: ${CONFIG.GITEE_JSON_URL}`);
     } else {
+      log('error', '❌ Gitee同步失败，本地JSON文件已保留');
       process.exit(1);
     }
-
+    log('success', '🏁 抖音私信全量用户采集（含最近聊天时间）+Gitee同步任务全部完成！');
   } catch (err) {
-    log('error', `🚨 致命错误: ${err.message}`);
+    log('error', `🚨 任务执行失败: ${err.message}`);
+    log('error', '错误详情:', err.stack);
     process.exit(1);
   } finally {
-    if (browser) await browser.close();
+    // 关闭浏览器
+    if (browser) {
+      await browser.close();
+      log('info', '✅ 浏览器已关闭');
+    }
   }
 }
-
+// 执行主函数
 runSync();
