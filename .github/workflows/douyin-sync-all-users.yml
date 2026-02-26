@@ -1,0 +1,40 @@
+name: 抖音私信全量用户采集-同步Gitee
+# 触发规则：手动触发 + 每日凌晨2点（UTC时间，对应国内早10点）执行
+on:
+  workflow_dispatch: # 手动触发（核心，推荐）
+  schedule:
+    - cron: '0 2 * * *'
+
+# 任务配置
+jobs:
+  douyin-scrape-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # 超时时间30分钟（适配全量滚动采集）
+    steps:
+      - name: 1. 检出项目代码
+        uses: actions/checkout@v4
+
+      - name: 2. 设置Node.js环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18 # 适配playwright/axios
+          cache: 'npm' # 缓存npm依赖，加速构建
+
+      - name: 3. 安装项目依赖
+        run: |
+          npm install playwright axios fs-extra
+          npx playwright install-deps chromium # 安装chromium浏览器依赖（ubuntu）
+          npx playwright install chromium
+
+      - name: 4. 执行全量采集脚本
+        run: node sync_douyin_all_users.js
+        env:
+          # 从GitHub Secrets读取环境变量（核心，不要硬编码）
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
+
+      - name: 5. 保留本地JSON文件（可选，便于调试）
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-all-users-json
+          path: douyin_all_users.json
