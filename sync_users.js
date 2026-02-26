@@ -9,11 +9,11 @@ const CONFIG = {
   LOCAL_USERS_FILE: 'users.txt',
   CREATOR_CHAT_URL: 'https://creator.douyin.com/creator-micro/data/following/chat',
   GOTO_TIMEOUT: 120000,
-  MAX_SCROLL_ATTEMPTS: 150,
+  MAX_SCROLL_ATTEMPTS: 200,
   SCROLL_TOTAL_STEP: 600,
   SCROLL_STEP: 100,
-  MAX_NO_NEW_USER_COUNT: 8,
-  PRE_SCRIPT_WAIT: 30000 // 新增：脚本开始前等待30秒
+  MAX_NO_NEW_USER_COUNT: 15,
+  PRE_SCRIPT_WAIT: 30000
 };
 
 // 日志函数（增强版，带时间戳和颜色）
@@ -35,9 +35,9 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版）');
+    log('info', '🚀 启动抖音用户同步脚本（弹窗触发+全量日志版）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
-    await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT)); // 脚本开始前等待30秒
+    await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
     log('info', '✅ 等待结束，开始执行任务');
 
     // ========== 1. 环境变量校验 ==========
@@ -145,10 +145,13 @@ async function runSync() {
 
     page = await context.newPage();
     page.on('pageerror', err => log('error', `页面运行错误: ${err.message}`));
-    page.on('requestfailed', req => log('warn', `请求失败: ${req.url()} - ${req.failure()?.errorText}`));
+    page.on('request', req => log('info', `→ 发送请求: ${req.url()}`));
+    page.on('requestfailed', req => log('warn', `✗ 请求失败: ${req.url()} - ${req.failure()?.errorText}`));
     page.on('response', res => {
       if (res.status() >= 400) {
-        log('warn', `响应异常: ${res.url()} - ${res.status()}`);
+        log('warn', `← 响应异常: ${res.url()} - ${res.status()}`);
+      } else {
+        log('info', `← 收到响应: ${res.url()} - ${res.status()}`);
       }
     });
     log('success', '✅ 浏览器启动完成');
@@ -176,7 +179,7 @@ async function runSync() {
     });
     log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
 
-    // ================= 【核心修复：全量滚动+全量匹配逻辑】 =================
+    // ================= 【核心修复：强制触发弹窗+全量日志】 =================
     const scanResult = await page.evaluate(async (params) => {
       const { CONFIG, TARGET_DOUYIN_IDS } = params;
       
@@ -188,26 +191,36 @@ async function runSync() {
 
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-      function triggerMouseEvent(element, eventType) {
-        if (!element) return;
-        const rect = element.getBoundingClientRect();
-        const event = new MouseEvent(eventType, {
-          bubbles: true, cancelable: true, view: window,
-          clientX: rect.left + rect.width / 2,
-          clientY: rect.top + rect.height / 2
-        });
-        element.dispatchEvent(event);
-      }
-
-      function findHoverTarget() {
-        const elements = document.querySelectorAll('span, div');
-        for (const el of elements) {
-          if (el.textContent.trim() === '查看Ta的主页') {
-            return el;
+      // 强制触发“查看Ta的主页”弹窗
+      const findAndTriggerProfilePopup = () => {
+        console.log('🔍 正在查找“查看Ta的主页”元素...');
+        let profileEl = null;
+        const allElements = document.querySelectorAll('span, div, a, button');
+        
+        for (const el of allElements) {
+          const text = el.textContent.trim().toLowerCase();
+          if (text.includes('查看ta的主页') || text.includes('查看主页') || text.includes('profile')) {
+            profileEl = el;
+            console.log('✅ 找到“查看Ta的主页”元素:', el);
+            break;
           }
         }
-        return null;
-      }
+        
+        if (!profileEl) {
+          console.log('❌ 未找到“查看Ta的主页”元素');
+          return null;
+        }
+
+        // 强制触发所有能唤起弹窗的事件
+        console.log('🔥 强制触发弹窗事件...');
+        profileEl.click();
+        profileEl.focus();
+        profileEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        profileEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        profileEl.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+        
+        return profileEl;
+      };
 
       function findScrollContainer() {
         let container = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items');
@@ -299,24 +312,22 @@ async function runSync() {
             el.click({ force: true });
             await sleep(1500);
 
-            const hoverTarget = findHoverTarget();
+            // 强制触发弹窗并提取抖音号
+            const profileEl = findAndTriggerProfilePopup();
             let dyId = null;
-            if (hoverTarget) {
-              hoverTarget.scrollIntoView({ block: "center" });
-              triggerMouseEvent(hoverTarget, 'mousemove');
-              await sleep(50);
-              triggerMouseEvent(hoverTarget, 'mouseenter');
-              triggerMouseEvent(hoverTarget, 'mouseover');
-
-              for (let i = 0; i < 20; i++) {
+            if (profileEl) {
+              console.log('⏳ 等待弹窗出现并提取抖音号...');
+              for (let i = 0; i < 40; i++) {
                 await sleep(100);
-                const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
+                const text = document.body.innerText;
+                const match = text.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/i);
                 if (match) {
                   dyId = match[1].trim();
+                  console.log(`✅ 成功提取抖音号: ${dyId}`);
                   break;
                 }
+                console.log(`⏳ 第 ${i + 1} 次尝试提取抖音号...`);
               }
-              triggerMouseEvent(hoverTarget, 'mouseleave');
             }
 
             processedNicknames.add(nickname);
