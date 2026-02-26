@@ -32,7 +32,7 @@ async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版）');
+    log('info', '🚀 启动抖音用户同步脚本（滚动全量修复版+首元素点击优化）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒，确保网页加载完成...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT)); // 脚本开始前等待30秒
     log('info', '✅ 等待结束，开始执行任务');
@@ -153,18 +153,37 @@ async function runSync() {
       timeout: 60000,
       state: 'attached'
     });
-    log('success', '✅ 页面加载完成，用户列表已渲染，开始全量遍历扫描');
+    log('success', '✅ 页面加载完成，用户列表已渲染，准备点击第一个昵称');
 
-    // ================= 新增：点击第一个昵称的核心代码 =================
-    log('info', '👉 开始点击第一个昵称元素，初始化选中状态');
+    // ================= 核心修复：点击第一个昵称（解决可视区域外问题） =================
+    log('info', '👉 开始定位并点击第一个昵称元素，初始化选中状态');
+    // 兜底：先将页面和列表滚动到顶部，避免元素偏移
+    await page.evaluate(() => {
+      window.scrollTo(0, 0);
+      const scrollContainer = document.querySelector('.ReactVirtualized__Grid, [role="grid"], .semi-list-items') || document.scrollingElement;
+      if (scrollContainer) scrollContainer.scrollTop = 0;
+    });
+    await page.waitForTimeout(500);
+    // 等待第一个昵称元素加载，确保句柄有效
     const firstNicknameEl = await page.waitForSelector(
       'span[class*="name"], div[class*="name"], span[data-testid*="nickname"], div[data-testid*="user-name"], [class*="user-item"] span',
       { timeout: 30000, state: 'attached' }
     );
-    await firstNicknameEl.click({ force: true });
+    // 滚动元素到可视区域（居中），解决outside viewport
+    await firstNicknameEl.scrollIntoViewIfNeeded({ block: 'center', inline: 'center' });
+    await page.waitForTimeout(1000);
+    // 精准XPath点击第一个元素，强制点击+内部坐标，避免无效点击
+    await page.click(
+      'xpath=//*[self::span or self::div][contains(@class,"name") or @data-testid*="nickname" or @data-testid*="user-name" or (ancestor::*[contains(@class,"user-item")] and self::span)][1]',
+      {
+        force: true,
+        timeout: 10000,
+        position: { x: 10, y: 10 }
+      }
+    );
     await page.waitForTimeout(2000);
     log('success', '✅ 第一个昵称元素点击完成，开始执行全量遍历');
-    // ================= 新增代码结束 =================
+    // ================= 首元素点击逻辑结束 =================
 
     // ================= 【核心修复：全量滚动+全量匹配逻辑】 =================
     const scanResult = await page.evaluate(async (params) => {
