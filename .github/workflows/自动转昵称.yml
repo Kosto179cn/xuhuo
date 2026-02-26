@@ -3,7 +3,7 @@ name: 🔗 Gitee同步 - 抖音ID转昵称
 on:
   schedule:
     # 北京时间 每10分钟执行一次
-    - cron: '*/10 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       mode:
