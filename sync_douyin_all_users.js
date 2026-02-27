@@ -57,53 +57,64 @@ const uploadJsonToGitee = async (content, token) => {
     return false;
   }
 };
-// --- 新增函数：将 UTC 时间字符串转换为 北京时间 (UTC+8) 字符串 ---
-// 此函数假设输入的 utcStr 是 UTC 时区的时间
-function convertUtcToBeijingTime(utcStr) {
-  // 如果包含“刚刚”、“小时前”等相对描述，直接返回（无法计算）
-  if (utcStr.match(/(刚刚|分钟前|小时前|昨天|前天)/)) {
-    return utcStr;
+// --- 新函数：将相对时间（如“06:16”、“昨天 05:11”）转换为北京时间戳 ---
+function convertRelativeToBeijingTime(relativeStr) {
+  const now = new Date();
+  const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000); // 当前北京时间
+
+  // 1. 处理“刚刚”、“X分钟前”、“X小时前”
+  const justNowMatch = relativeStr.match(/刚刚/);
+  if (justNowMatch) {
+    return formatDate(beijingNow);
   }
-  // 尝试匹配 "2026-02-27 02:30:45" 或 "2026-02-27 02:30"
-  const fullMatch = utcStr.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})?$/);
-  if (fullMatch) {
-    // 构造 UTC 时间
-    const date = new Date(Date.UTC(
-      parseInt(fullMatch[1]),
-      parseInt(fullMatch[2]) - 1, // 月份从0开始
-      parseInt(fullMatch[3]),
-      parseInt(fullMatch[4].split(':')[0]),
-      parseInt(fullMatch[4].split(':')[1])
-    ));
-    date.setHours(date.getHours() + 8); // 转换为北京时间
-    return formatDate(date);
+
+  const minuteMatch = relativeStr.match(/(\d+)分钟前/);
+  if (minuteMatch) {
+    const minutes = parseInt(minuteMatch[1]);
+    const time = new Date(beijingNow.getTime() - minutes * 60 * 1000);
+    return formatDate(time);
   }
-  // 尝试匹配 "02-27 02:30:45" 或 "02-27 02:30" (无年份)
-  const shortMatch = utcStr.match(/^(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})?$/);
-  if (shortMatch) {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    // 构造 UTC 时间 (假设是今年)
-    const date = new Date(Date.UTC(
-      currentYear,
-      parseInt(shortMatch[1]) - 1,
-      parseInt(shortMatch[2]),
-      parseInt(shortMatch[3].split(':')[0]),
-      parseInt(shortMatch[3].split(':')[1])
-    ));
-    date.setHours(date.getHours() + 8); // 转换为北京时间
-    return formatDate(date);
+
+  const hourMatch = relativeStr.match(/(\d+)小时前/);
+  if (hourMatch) {
+    const hours = parseInt(hourMatch[1]);
+    const time = new Date(beijingNow.getTime() - hours * 60 * 60 * 1000);
+    return formatDate(time);
   }
-  // 尝试匹配 ISO 格式 "2026-02-27T02:30:45Z"
-  const isoMatch = utcStr.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z$/);
-  if (isoMatch) {
-    const date = new Date(utcStr); // JS 自动解析为 UTC
-    date.setHours(date.getHours() + 8); // 转换为北京时间
-    return formatDate(date);
+
+  // 2. 处理“昨天 HH:MM”
+  const yesterdayMatch = relativeStr.match(/昨天\s*(\d{2}:\d{2})/);
+  if (yesterdayMatch) {
+    const [hours, minutes] = yesterdayMatch[1].split(':').map(Number);
+    const time = new Date(beijingNow);
+    time.setDate(beijingNow.getDate() - 1);
+    time.setHours(hours, minutes, 0, 0);
+    return formatDate(time);
   }
-  // 格式不匹配，直接返回原值
-  return utcStr;
+
+  // 3. 处理“前天 HH:MM”
+  const dayBeforeYesterdayMatch = relativeStr.match(/前天\s*(\d{2}:\d{2})/);
+  if (dayBeforeYesterdayMatch) {
+    const [hours, minutes] = dayBeforeYesterdayMatch[1].split(':').map(Number);
+    const time = new Date(beijingNow);
+    time.setDate(beijingNow.getDate() - 2);
+    time.setHours(hours, minutes, 0, 0);
+    return formatDate(time);
+  }
+
+  // 4. 处理“HH:MM”（默认是今天）
+  const todayMatch = relativeStr.match(/^(\d{2}:\d{2})$/);
+  if (todayMatch) {
+    const [hours, minutes] = todayMatch[1].split(':').map(Number);
+    const time = new Date(beijingNow);
+    time.setHours(hours, minutes, 0, 0);
+    return formatDate(time);
+  }
+
+  // 5. 其他情况，直接返回原始字符串
+  return relativeStr;
 }
+
 // 格式化日期为 "YYYY-MM-DD HH:mm"
 function formatDate(date) {
   const year = date.getFullYear();
@@ -113,7 +124,7 @@ function formatDate(date) {
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
-// --- 新增函数结束 ---
+// --- 新函数结束 ---
 // 主函数
 async function runSync() {
   let browser = null;
@@ -287,7 +298,7 @@ async function runSync() {
                 nickname: nickname,
                 douyinId: douyinId,
                 avatar: avatar,
-                lastChatTime: lastChatTime // 存储原始时间（UTC）
+                lastChatTime: lastChatTime // 存储原始时间（相对时间）
               });
             }
             nickEl.setAttribute(PROCESSED_ATTR, 'true');
@@ -304,11 +315,11 @@ async function runSync() {
       log('error', `⚠️ 采集异常: ${scanResult.error}`);
     }
     log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户（含最近聊天时间）`);
-    // --- 新增逻辑：将 UTC 时间转换为 北京时间 ---
-    log('info', '🕰️ 正在将 UTC 时间转换为 北京时间...');
+    // --- 新增逻辑：将相对时间转换为 北京时间 ---
+    log('info', '🕰️ 正在将相对时间转换为 北京时间...');
     const finalUsers = scanResult.allUsers.map(user => {
-      // 调用转换函数
-      const beijingTime = convertUtcToBeijingTime(user.lastChatTime);
+      // 调用新的转换函数
+      const beijingTime = convertRelativeToBeijingTime(user.lastChatTime);
       return {
         ...user,
         lastChatTime: beijingTime
