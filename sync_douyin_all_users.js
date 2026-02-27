@@ -2,8 +2,7 @@ const { chromium } = require('playwright');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-
-// 固定配置
+// 固定配置（完全保留原有，未做任何修改）
 const CONFIG = {
   GITEE_JSON_URL: 'https://gitee.com/api/v5/repos/Kosto179/kosto-battle-clicker-new/contents/douyin_all_users.json',
   LOCAL_USERS_JSON: 'douyin_all_users.json',
@@ -15,8 +14,7 @@ const CONFIG = {
   MAX_NO_NEW_USER_COUNT: 8,
   PRE_SCRIPT_WAIT: 30000
 };
-
-// 日志函数
+// 日志函数（完全保留原有）
 const log = (level, msg, ...args) => {
   const timestamp = new Date().toLocaleTimeString();
   const colors = {
@@ -29,8 +27,7 @@ const log = (level, msg, ...args) => {
   const color = colors[level] || colors.info;
   console.log(`[${timestamp}] ${color}[${level.toUpperCase()}]${reset} ${msg}`, ...args);
 };
-
-// Gitee上传JSON文件
+// Gitee上传JSON文件（完全保留原有上传逻辑）
 const uploadJsonToGitee = async (content, token) => {
   try {
     const base64Content = Buffer.from(content).toString('base64');
@@ -60,77 +57,79 @@ const uploadJsonToGitee = async (content, token) => {
     return false;
   }
 };
-
-// =============== 新增：UTC转北京时间函数 ===============
-// 专门解决服务器是UTC，想显示北京时间的问题
+// --- 新增函数：将 UTC 时间字符串转换为 北京时间 (UTC+8) 字符串 ---
+// 此函数假设输入的 utcStr 是 UTC 时区的时间
 function convertUtcToBeijingTime(utcStr) {
-  // 如果是“刚刚”、“小时前”这种相对描述，直接返回（没法算）
-  if (!utcStr || utcStr.includes('刚刚') || utcStr.includes('分钟') || utcStr.includes('小时') || utcStr.includes('昨天') || utcStr.includes('前天')) {
+  // 如果包含“刚刚”、“小时前”等相对描述，直接返回（无法计算）
+  if (utcStr.match(/(刚刚|分钟前|小时前|昨天|前天)/)) {
     return utcStr;
   }
-
-  // 尝试解析 "02-27 02:30" 这种格式（无年份）
-  const shortMatch = utcStr.match(/(\d{2})-(\d{2}) (\d{2}:\d{2})/);
+  // 尝试匹配 "2026-02-27 02:30:45" 或 "2026-02-27 02:30"
+  const fullMatch = utcStr.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})?$/);
+  if (fullMatch) {
+    // 构造 UTC 时间
+    const date = new Date(Date.UTC(
+      parseInt(fullMatch[1]),
+      parseInt(fullMatch[2]) - 1, // 月份从0开始
+      parseInt(fullMatch[3]),
+      parseInt(fullMatch[4].split(':')[0]),
+      parseInt(fullMatch[4].split(':')[1])
+    ));
+    date.setHours(date.getHours() + 8); // 转换为北京时间
+    return formatDate(date);
+  }
+  // 尝试匹配 "02-27 02:30:45" 或 "02-27 02:30" (无年份)
+  const shortMatch = utcStr.match(/^(\d{2})-(\d{2}) (\d{2}:\d{2})(?::\d{2})?$/);
   if (shortMatch) {
     const now = new Date();
-    // 构造一个UTC时间
-    const utcDate = new Date(Date.UTC(
-      now.getFullYear(),
-      parseInt(shortMatch) - 1,
-      parseInt(shortMatch),
-      parseInt(shortMatch.split(':')),
-      parseInt(shortMatch.split(':'))
+    const currentYear = now.getFullYear();
+    // 构造 UTC 时间 (假设是今年)
+    const date = new Date(Date.UTC(
+      currentYear,
+      parseInt(shortMatch[1]) - 1,
+      parseInt(shortMatch[2]),
+      parseInt(shortMatch[3].split(':')[0]),
+      parseInt(shortMatch[3].split(':')[1])
     ));
-    // 转为北京时间（加8小时）
-    utcDate.setHours(utcDate.getHours() + 8);
-    return formatDate(utcDate);
+    date.setHours(date.getHours() + 8); // 转换为北京时间
+    return formatDate(date);
   }
-
-  // 尝试解析 "2026-02-27 02:30" 这种格式
-  const fullMatch = utcStr.match(/(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})/);
-  if (fullMatch) {
-    const utcDate = new Date(Date.UTC(
-      parseInt(fullMatch),
-      parseInt(fullMatch) - 1,
-      parseInt(fullMatch),
-      parseInt(fullMatch.split(':')),
-      parseInt(fullMatch.split(':'))
-    ));
-    utcDate.setHours(utcDate.getHours() + 8);
-    return formatDate(utcDate);
+  // 尝试匹配 ISO 格式 "2026-02-27T02:30:45Z"
+  const isoMatch = utcStr.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z$/);
+  if (isoMatch) {
+    const date = new Date(utcStr); // JS 自动解析为 UTC
+    date.setHours(date.getHours() + 8); // 转换为北京时间
+    return formatDate(date);
   }
-
-  // 都不匹配，原样返回
+  // 格式不匹配，直接返回原值
   return utcStr;
 }
-
-// 格式化日期为 "MM-DD HH:mm"（保持和原来一样的风格）
+// 格式化日期为 "YYYY-MM-DD HH:mm"
 function formatDate(date) {
+  const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${month}-${day} ${hours}:${minutes}`;
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
-// ==================================================
-
+// --- 新增函数结束 ---
+// 主函数
 async function runSync() {
   let browser = null;
   let page = null;
   try {
-    log('info', '🚀 启动抖音私信全量用户采集脚本');
+    log('info', '🚀 启动抖音私信全量用户采集脚本（修复版：头像+抖音号+最近聊天时间）');
     log('info', `⏳ 脚本开始前等待 ${CONFIG.PRE_SCRIPT_WAIT / 1000} 秒...`);
     await new Promise(resolve => setTimeout(resolve, CONFIG.PRE_SCRIPT_WAIT));
-
-    // 1. 环境变量校验
+    // 1. 环境变量校验（原有逻辑）
     const giteeToken = process.env.GITEE_TOKEN?.trim();
     const douyinCookies = process.env.DOUYIN_COOKIES?.trim();
     if (!giteeToken || !douyinCookies) {
       log('error', '❌ 缺少环境变量 GITEE_TOKEN 或 DOUYIN_COOKIES');
       process.exit(1);
     }
-
-    // 2. 启动浏览器
+    // 2. 启动浏览器（原有逻辑）
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
@@ -139,8 +138,7 @@ async function runSync() {
       viewport: { width: 1920, height: 1080 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
-
-    // Cookie 处理
+    // Cookie 处理（原有逻辑）
     const cleanCookies = JSON.parse(douyinCookies).map(cookie => {
       if (cookie.sameSite) {
         const ss = cookie.sameSite.toLowerCase();
@@ -153,33 +151,27 @@ async function runSync() {
     });
     await context.addCookies(cleanCookies);
     page = await context.newPage();
-
-    // 3. 进入页面
+    // 3. 进入页面（原有逻辑）
     log('info', '🌐 进入抖音创作者私信页...');
     await page.goto(CONFIG.CREATOR_CHAT_URL, { waitUntil: 'domcontentloaded', timeout: CONFIG.GOTO_TIMEOUT });
     await page.waitForTimeout(15000);
-
-    // 验证登录
+    // 验证登录（原有逻辑）
     if (page.url().includes('login')) {
       log('error', '❌ Cookie已失效');
       process.exit(1);
     }
-
-    // 等待列表加载
+    // 等待列表加载（原有逻辑）
     log('info', '🔍 等待用户列表渲染...');
     await page.waitForSelector('.semi-list-item, [class*="name"]', { timeout: 60000 });
-
-    // 4. 全量采集核心逻辑
+    // 4. 全量采集核心逻辑（修复抖音号提取+优化时间提取空值判断）
     log('info', '✅ 开始全量滚动采集（含最近聊天时间）');
-
     const scanResult = await page.evaluate(async (CONFIG) => {
       const allUsers = [];
-      const processedIds = new Set();
+      const processedIds = new Set(); // 用于去重 (优先用抖音号，没有则用昵称)
       const PROCESSED_ATTR = 'data-user-processed';
       let noNewUserCount = 0;
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-      // --- 辅助函数（保持不变）---
+      // --- 移植自 sync_users.js 的核心辅助函数（原有逻辑）---
       function triggerMouseEvent(element, eventType) {
         if (!element) return;
         const rect = element.getBoundingClientRect();
@@ -198,6 +190,7 @@ async function runSync() {
         return null;
       }
       function findScrollContainer() {
+        // 优先查找 semi-design 的列表容器
         const semiContainer = document.querySelector('.semi-list, .semi-list-items');
         if (semiContainer) return semiContainer;
         const allDivs = document.querySelectorAll('div');
@@ -217,15 +210,16 @@ async function runSync() {
           container.scrollTop += CONFIG.SCROLL_STEP;
           await sleep(50);
         }
+        // 模拟键盘 PageDown 以触发懒加载
         container.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
         await sleep(1500);
         return container.scrollTop > startTop;
       }
-
-      // --- 采集循环 ---
+      // --- 采集循环（核心修复：抖音号提取 + 时间提取空值优化）---
       try {
         const container = findScrollContainer();
         for (let attempt = 0; attempt < CONFIG.MAX_SCROLL_ATTEMPTS; attempt++) {
+          // 查找所有昵称元素 (对应 HTML 中的 .item-header-name-vL_79m)
           const potentialNicknames = Array.from(document.querySelectorAll(
             '.semi-list-item .item-header-name-vL_79m, .semi-list-item span[class*="name"]'
           ));
@@ -240,53 +234,52 @@ async function runSync() {
           for (const nickEl of unprocessed) {
             if (nickEl.hasAttribute(PROCESSED_ATTR)) continue;
             const nickname = nickEl.textContent.trim();
+            // 找到当前行的父容器 (HTML中的 li.semi-list-item)
             const rowItem = nickEl.closest('.semi-list-item');
-
-            // 1. 获取头像
+            // 1. 获取头像 (原有逻辑)
             let avatar = 'default.jpg';
             if (rowItem) {
               const imgEl = rowItem.querySelector('.semi-avatar img, img[src*="avatar"]');
               if (imgEl && imgEl.src) {
                 avatar = imgEl.src;
+                // 修复相对协议
                 if (avatar.startsWith('//')) avatar = 'https:' + avatar;
               }
             }
-
-            // ====== 提取最近聊天时间 (原始 UTC 时间) ======
+            // ====== 提取最近聊天时间 (优化空值判断，防止报错) ======
             let lastChatTime = '未获取到';
             const timeEl = rowItem?.querySelector('[class^="item-header-time-"], [class*="time"]');
-            if (timeEl) {
+            if (timeEl && timeEl.textContent) { // 增加文本非空判断
               lastChatTime = timeEl.textContent.trim();
             }
             // =====================================
-
-            // 滚动并点击
+            // 滚动到该元素并点击（原有逻辑）
             nickEl.scrollIntoView({ block: "center" });
             await sleep(100);
             nickEl.click({ force: true });
-            await sleep(1500);
-
-            // 2. 获取抖音号
+            await sleep(1500); // 等待右侧聊天窗口加载
+            // 2. 获取抖音号 (核心修复：match数组取值 + 空值判断)
             let douyinId = '未获取到';
-            const hoverTarget = findHoverTarget();
+            const hoverTarget = findHoverTarget(); // 查找 "查看Ta的主页"
             if (hoverTarget) {
+              // 模拟完整的鼠标交互序列
               triggerMouseEvent(hoverTarget, 'mousemove');
               await sleep(50);
               triggerMouseEvent(hoverTarget, 'mouseenter');
               await sleep(50);
               triggerMouseEvent(hoverTarget, 'mouseover');
+              // 循环检测弹窗内容
               for (let k = 0; k < 15; k++) {
                 await sleep(150);
                 const match = document.body.innerText.match(/抖音号\s*[:：]\s*([\w\.\-_]+)/);
-                if (match) {
-                  douyinId = match.trim();
+                if (match && match[1]) { // 增加数组非空+捕获项存在判断
+                  douyinId = match[1].trim(); // 取捕获组第1项再trim，修复核心报错
                   break;
                 }
               }
-              triggerMouseEvent(hoverTarget, 'mouseleave');
+              triggerMouseEvent(hoverTarget, 'mouseleave'); // 移开鼠标防止遮挡
             }
-
-            // 存储数据
+            // 存储数据 (去重，原有逻辑+新增lastChatTime字段)
             const uniqueKey = douyinId !== '未获取到' ? douyinId : `nick_${nickname}`;
             if (!processedIds.has(uniqueKey)) {
               processedIds.add(uniqueKey);
@@ -294,7 +287,7 @@ async function runSync() {
                 nickname: nickname,
                 douyinId: douyinId,
                 avatar: avatar,
-                lastChatTime: lastChatTime // 存储原始时间
+                lastChatTime: lastChatTime // 存储原始时间（UTC）
               });
             }
             nickEl.setAttribute(PROCESSED_ATTR, 'true');
@@ -307,33 +300,28 @@ async function runSync() {
         return { success: false, error: e.message, allUsers: [] };
       }
     }, CONFIG);
-
     if (!scanResult.success) {
       log('error', `⚠️ 采集异常: ${scanResult.error}`);
     }
-    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户`);
-
-    // =============== 关键步骤：转换时间 ===============
+    log('info', `📝 采集完成，共获取 ${scanResult.count || 0} 个用户（含最近聊天时间）`);
+    // --- 新增逻辑：将 UTC 时间转换为 北京时间 ---
     log('info', '🕰️ 正在将 UTC 时间转换为 北京时间...');
     const finalUsers = scanResult.allUsers.map(user => {
-      // 调用我们上面写的转换函数
+      // 调用转换函数
       const beijingTime = convertUtcToBeijingTime(user.lastChatTime);
       return {
         ...user,
         lastChatTime: beijingTime
       };
     });
-    // =============================================
-
-    // 5. 保存与上传
+    // --- 转换结束 ---
+    // 5. 保存与上传（使用转换后的新数据）
     const jsonStr = JSON.stringify(finalUsers, null, 2);
     fs.writeFileSync(CONFIG.LOCAL_USERS_JSON, jsonStr, 'utf8');
-
     log('info', '📤 同步到 Gitee...');
     const uploadRes = await uploadJsonToGitee(jsonStr, giteeToken);
-
     if (uploadRes) {
-      log('success', '✅ 任务全部完成（时间已转换为北京时间）');
+      log('success', '✅ 任务全部完成（用户数据+北京时间已同步至Gitee）');
     } else {
       process.exit(1);
     }
@@ -344,5 +332,4 @@ async function runSync() {
     if (browser) await browser.close();
   }
 }
-
 runSync();
