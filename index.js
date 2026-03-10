@@ -12,7 +12,7 @@ const CONFIG = {
     ? fs.readFileSync(path.join(__dirname, 'users.txt'), 'utf8')
     : '用户1\n用户2\n用户3',
   // 标题在这里统一定义，[API] 会被替换为下方 getHitokoto 的内容
-  messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n[API]',
+  messageTemplate: process.env.MESSAGE_TEMPLATE || '꧁————每日续火————꧂\n\n[API]',
   gotoTimeout: 60000,
   // ⭐ 单人模式：如果设置了环境变量，则只发送给该用户
   onlyFor: process.env.ONLY_FOR_KOSTO || ''
@@ -127,8 +127,7 @@ async function getHitokoto() {
     由我为您推荐今日抖音热搜 TOP5：
     ${hotList}
 
-    ${yiyan}
-    `;
+    ${yiyan}`;
 
     return msg;
   } catch (e) {
