@@ -124,11 +124,11 @@ async function getHitokoto() {
     
     msg += `
     
-由我为您推荐今日抖音热搜 TOP5：
-${hotList}
+    由我为您推荐今日抖音热搜 TOP5：
+    ${hotList}
 
-${yiyan}
-\n接自动抖音续火花5米-30米/月 有需要可直接在此处聊天发信息`;
+    ${yiyan}
+    `;
 
     return msg;
   } catch (e) {
