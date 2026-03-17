@@ -32,7 +32,8 @@ jobs:
       - name: 运行同步用户脚本
         env:
           # 如果同步脚本也需要 Cookie 等变量，请在这里配置
-          DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }} 
+          DOUYIN_COOKIES: ${{ secrets.DOUYIN_COOKIES }}
+GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }} 
         run: node sync_users.js
       
       # ⭐ 原有步骤：后运行自动发送(续火)脚本
