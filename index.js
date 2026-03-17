@@ -122,12 +122,8 @@ async function getHitokoto() {
     
     msg += festivalText;
     
-    msg += `
-    
-    由我为您推荐今日抖音热搜 TOP5：
-    ${hotList}
-
-    ${yiyan}`;
+    // ⭐ 修复格式问题：不再使用带缩进的多行模板字符串，改用 \n 换行符
+    msg += `\n\n由我为您推荐今日抖音热搜 TOP5：\n${hotList}\n\n${yiyan}`;
 
     return msg;
   } catch (e) {
